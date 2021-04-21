@@ -4,7 +4,6 @@ import hmac
 import json
 import sys
 import time
-import zlib
 from copy import copy
 from datetime import datetime
 from threading import Lock
@@ -17,14 +16,30 @@ from pytz import utc as UTC_TZ
 
 from vnpy.api.rest import Request, RestClient
 from vnpy.api.websocket import WebsocketClient
-from vnpy.trader.constant import (Direction, Exchange, Interval, Offset, OrderType, Product, Status, OptionType)
+from vnpy.trader.constant import (
+    Direction,
+    Exchange,
+    Interval,
+    Offset,
+    OrderType,
+    Product,
+    Status,
+    OptionType
+)
 from vnpy.trader.gateway import BaseGateway
-from vnpy.trader.object import (AccountData, BarData, CancelRequest, ContractData, HistoryRequest,
-                                OrderData, OrderRequest, PositionData, SubscribeRequest, TickData,
-                                TradeData)
-
-from tzlocal import get_localzone
-LOCAL_TZ = get_localzone()
+from vnpy.trader.object import (
+    AccountData,
+    BarData,
+    CancelRequest,
+    ContractData,
+    HistoryRequest,
+    OrderData,
+    OrderRequest,
+    PositionData,
+    SubscribeRequest,
+    TickData,
+    TradeData
+)
 
 _ = lambda x: x  # noqa
 REST_HOST = "https://www.okex.com"
@@ -105,8 +120,6 @@ class OkexV5Gateway(BaseGateway):
         super().__init__(event_engine, "OKEXV5")
 
         self.rest_api = OkexV5RestApi(self)
-        # self.ws_api = OkexV5WebsocketApi(self)
-
         self.ws_pub_api = OkexV5WebsocketPublicApi(self)
         self.ws_pri_api = OkexV5WebsocketPrivateApi(self)
 
@@ -139,15 +152,12 @@ class OkexV5Gateway(BaseGateway):
 
         self.rest_api.connect(usdt_base, key, secret, passphrase,
                               session_number, proxy_host, proxy_port)
-        # self.ws_api.connect(usdt_base, key, secret, passphrase, proxy_host, proxy_port, server)
-
         self.ws_pub_api.connect(usdt_base, proxy_host, proxy_port, server)
-        self.ws_pri_api.connect(usdt_base, key, secret, passphrase, proxy_host, proxy_port, server)
+        self.ws_pri_api.connect(usdt_base, key, secret, passphrase, proxy_host,
+                                proxy_port, server)
 
     def subscribe(self, req: SubscribeRequest):
         """"""
-        # self.ws_api.subscribe(req)
-
         self.ws_pub_api.subscribe(req)
 
     def send_order(self, req: OrderRequest):
@@ -173,8 +183,6 @@ class OkexV5Gateway(BaseGateway):
     def close(self):
         """"""
         self.rest_api.stop()
-        # self.ws_api.stop()
-
         self.ws_pub_api.stop()
         self.ws_pri_api.stop()
 
@@ -441,7 +449,8 @@ class OkexV5RestApi(RestClient):
     def on_query_accounts(self, data, request):
         """"""
         for details in data['data']:
-            account = _parse_account_details(details, gateway_name=self.gateway_name)
+            account = _parse_account_details(details,
+                                             gateway_name=self.gateway_name)
             self.gateway.on_account(account)
 
         self.gateway.write_log("账户资金查询成功")
@@ -453,13 +462,15 @@ class OkexV5RestApi(RestClient):
 
             for data in d:
                 symbol = data["instId"].upper()
-                pos = _parse_position_data(data, symbol=symbol, gateway_name=self.gateway_name)
+                pos = _parse_position_data(data, symbol=symbol,
+                                           gateway_name=self.gateway_name)
                 self.gateway.on_position(pos)
 
     def on_query_order(self, data, request):
         """"""
         for order_info in data["data"]:
-            order = _parse_order_data(order_info, gateway_name=self.gateway_name)
+            order = _parse_order_data(order_info,
+                                      gateway_name=self.gateway_name)
             self.gateway.on_order(order)
 
     def on_query_time(self, data, request):
@@ -483,7 +494,11 @@ class OkexV5RestApi(RestClient):
         self.gateway.write_log(msg)
 
     def on_send_order_error(
-        self, exception_type: type, exception_value: Exception, tb, request: Request
+        self,
+        exception_type: type,
+        exception_value: Exception,
+        tb,
+        request: Request
     ):
         """
         Callback when sending order caused exception.
@@ -510,7 +525,11 @@ class OkexV5RestApi(RestClient):
             self.gateway.write_log(f"委托失败：{error_msg}")
 
     def on_cancel_order_error(
-        self, exception_type: type, exception_value: Exception, tb, request: Request
+        self,
+        exception_type: type,
+        exception_value: Exception,
+        tb,
+        request: Request
     ):
         """
         Callback when cancelling order failed on server.
@@ -543,7 +562,11 @@ class OkexV5RestApi(RestClient):
         self.gateway.write_log(msg)
 
     def on_error(
-        self, exception_type: type, exception_value: Exception, tb, request: Request
+        self,
+        exception_type: type,
+        exception_value: Exception,
+        tb,
+        request: Request
     ):
         """
         Callback to handler request exception.
@@ -730,7 +753,9 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
-        sys.stderr.write(self.exception_detail(exception_type, exception_value, tb))
+        sys.stderr.write(
+            self.exception_detail(exception_type, exception_value, tb)
+        )
 
     def subscribe_public_topic(self):
         """
@@ -858,7 +883,9 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
         msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
-        sys.stderr.write(self.exception_detail(exception_type, exception_value, tb))
+        sys.stderr.write(
+            self.exception_detail(exception_type, exception_value, tb)
+        )
 
     def login(self):
         """
