@@ -10,6 +10,7 @@ from datetime import datetime
 from threading import Lock
 from urllib.parse import urlencode
 from typing import Dict
+from vnpy.trader.utility import round_to
 
 from requests import ConnectionError
 from pytz import utc as UTC_TZ
@@ -44,6 +45,8 @@ ORDERTYPE_OKEXV52VT = {
     "limit": OrderType.LIMIT
 }
 
+ORDERTYPE_VT2OKEXV5 = {v: k for k, v in ORDERTYPE_OKEXV52VT.items()}
+
 SIDE_OKEXV52VT = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
@@ -56,9 +59,9 @@ DIRECTION_OKEXV52VT = {
 }
 
 INTERVAL_VT2OKEXV5 = {
-    Interval.MINUTE: "60",
-    Interval.HOUR: "3600",
-    Interval.DAILY: "86400",
+    Interval.MINUTE: "1m",
+    Interval.HOUR: "1H",
+    Interval.DAILY: "1D",
 }
 
 PRODUCT_OKEXV52VT = {
@@ -67,12 +70,15 @@ PRODUCT_OKEXV52VT = {
     "FUTURES": Product.FUTURES,
     "OPTION": Product.OPTION
 }
+
+PRODUCT_VT2OKEXV5 = {v: k for k, v in PRODUCT_OKEXV52VT.items()}
+
 OPTIONTYPE_OKEXO2VT = {
     "C": OptionType.CALL,
     "P": OptionType.PUT
 }
 
-instruments = set()
+symbol_contract_map: Dict[str, ContractData] = {}
 
 
 class OkexV5Gateway(BaseGateway):
@@ -96,10 +102,13 @@ class OkexV5Gateway(BaseGateway):
 
     def __init__(self, event_engine):
         """Constructor"""
-        super(OkexV5Gateway, self).__init__(event_engine, "OKEXV5")
+        super().__init__(event_engine, "OKEXV5")
 
         self.rest_api = OkexV5RestApi(self)
-        self.ws_api = OkexV5WebsocketApi(self)
+        # self.ws_api = OkexV5WebsocketApi(self)
+
+        self.ws_pub_api = OkexV5WebsocketPublicApi(self)
+        self.ws_pri_api = OkexV5WebsocketPrivateApi(self)
 
         self.orders = {}
 
@@ -115,10 +124,8 @@ class OkexV5Gateway(BaseGateway):
 
         if server == "REAL":
             self.rest_api.simulated = False
-            self.ws_api.simulated = False
         else:
             self.rest_api.simulated = True
-            self.ws_api.simulated = True
 
         if setting["合约模式"] == "正向":
             usdt_base = True
@@ -132,11 +139,16 @@ class OkexV5Gateway(BaseGateway):
 
         self.rest_api.connect(usdt_base, key, secret, passphrase,
                               session_number, proxy_host, proxy_port)
-        self.ws_api.connect(usdt_base, key, secret, passphrase, proxy_host, proxy_port)
+        # self.ws_api.connect(usdt_base, key, secret, passphrase, proxy_host, proxy_port, server)
+
+        self.ws_pub_api.connect(usdt_base, proxy_host, proxy_port, server)
+        self.ws_pri_api.connect(usdt_base, key, secret, passphrase, proxy_host, proxy_port, server)
 
     def subscribe(self, req: SubscribeRequest):
         """"""
-        self.ws_api.subscribe(req)
+        # self.ws_api.subscribe(req)
+
+        self.ws_pub_api.subscribe(req)
 
     def send_order(self, req: OrderRequest):
         """"""
@@ -161,7 +173,10 @@ class OkexV5Gateway(BaseGateway):
     def close(self):
         """"""
         self.rest_api.stop()
-        self.ws_api.stop()
+        # self.ws_api.stop()
+
+        self.ws_pub_api.stop()
+        self.ws_pri_api.stop()
 
     def on_order(self, order: OrderData):
         """"""
@@ -266,12 +281,13 @@ class OkexV5RestApi(RestClient):
         orderid = f"a{self.connect_time}{self._new_order_id()}"
 
         data = {
-            "clOrdId": orderid,
-            "tdMode": "cross",
-            "side": SIDE_OKEXV52VT[req.direction],
             "instId": req.symbol,
+            "tdMode": "cross",
+            "clOrdId": orderid,
+            "side": SIDE_OKEXV52VT[req.direction],
+            "ordType": ORDERTYPE_VT2OKEXV5[req.type],
             "px": str(req.price),
-            "sz": str(req.volume),
+            "sz": str(req.volume)
         }
         if req.offset == Offset.OPEN:
             if req.direction == Direction.LONG:
@@ -279,7 +295,6 @@ class OkexV5RestApi(RestClient):
             else:
                 data["posSide"] = "short"
         elif req.offset == Offset.CLOSE:
-            data["reduceOnly"] = True
             if req.direction == Direction.LONG:
                 data["posSide"] = "short"
             else:
@@ -289,7 +304,7 @@ class OkexV5RestApi(RestClient):
 
         self.add_request(
             "POST",
-            "/api/v3/trade/order",
+            "/api/v5/trade/order",
             callback=self.on_send_order,
             data=data,
             extra=order,
@@ -403,7 +418,6 @@ class OkexV5RestApi(RestClient):
                     contract.option_portfolio,
                     contract.option_expiry.strftime("%Y%m%d")
                 ])
-                # instruments.add(instrument_data["instId"])
 
             elif product == Product.SPOT:
                 contract.net_position = True
@@ -413,6 +427,8 @@ class OkexV5RestApi(RestClient):
                 contract.size = float(d["ctMult"])
 
             self.gateway.on_contract(contract)
+
+            symbol_contract_map[contract.symbol] = contract
 
         self.gateway.write_log("合约信息查询成功")
 
@@ -545,15 +561,16 @@ class OkexV5RestApi(RestClient):
         end_time = None
 
         for i in range(10):
-            path = f"/api/swap/v3/instruments/{req.symbol}/candles"
+            path = "/api/v5/market/history-candles"
 
             # Create query params
             params = {
-                "granularity": INTERVAL_VT2OKEXV5[req.interval]
+                "instId": req.symbol,
+                "bar": INTERVAL_VT2OKEXV5[req.interval]
             }
 
             if end_time:
-                params["end"] = end_time
+                params["after"] = end_time
 
             # Get response from server
             resp = self.request(
@@ -569,19 +586,20 @@ class OkexV5RestApi(RestClient):
                 break
             else:
                 data = resp.json()
-                if not data:
-                    msg = "获取历史数据为空"
+                if not data["data"]:
+                    m = data["msg"]
+                    msg = f"获取历史数据为空, {m}"
                     break
 
-                for l in data:
-                    ts, o, h, l, c, v, _ = l
+                for l in data["data"]:
+                    ts, o, h, l, c, vol, _ = l
                     dt = _parse_timestamp(ts)
                     bar = BarData(
                         symbol=req.symbol,
                         exchange=req.exchange,
                         datetime=dt,
                         interval=req.interval,
-                        volume=float(v),
+                        volume=float(vol),
                         open_price=float(o),
                         high_price=float(h),
                         low_price=float(l),
@@ -605,25 +623,17 @@ class OkexV5RestApi(RestClient):
         return history
 
 
-class OkexV5WebsocketApi(WebsocketClient):
+class OkexV5WebsocketPublicApi(WebsocketClient):
     """"""
 
     def __init__(self, gateway):
         """"""
-        super(OkexV5WebsocketApi, self).__init__()
+        super(OkexV5WebsocketPublicApi, self).__init__()
         self.ping_interval = 20  # OKEX use 30 seconds for ping
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
 
-        self.key = ""
-        self.secret = ""
-        self.passphrase = ""
-
-        self._last_trade_id = 10000
-        self.connect_time = 0
-
-        self.simulated: bool = False
         self.usdt_base: bool = False
 
         self.subscribed: Dict[str, SubscribeRequest] = {}
@@ -633,36 +643,29 @@ class OkexV5WebsocketApi(WebsocketClient):
     def connect(
         self,
         usdt_base: bool,
-        key: str,
-        secret: str,
-        passphrase: str,
         proxy_host: str,
-        proxy_port: int
-    ):
+        proxy_port: int,
+        server: str
+    ) -> None:
         """"""
         self.usdt_base = usdt_base
-        self.key = key
-        self.secret = secret.encode()
-        self.passphrase = passphrase
 
-        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
-
-        if not self.simulated:
+        if server == "REAL":
             self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
-            self.init(PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
-
         else:
             self.init(SIMULATED_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
-            self.init(SIMULATED_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
-
-    def unpack_data(self, data):
-        """"""
-        return json.loads(zlib.decompress(data, -zlib.MAX_WBITS))
 
     def subscribe(self, req: SubscribeRequest):
         """
         Subscribe to tick data upate.
         """
+        self.callbacks["tickers"] = self.on_ticker
+        self.callbacks["books5"] = self.on_depth
+
+        if req.symbol not in symbol_contract_map:
+            self.gateway.write_log(f"找不到该合约代码{req.symbol}")
+            return
+
         self.subscribed[req.vt_symbol] = req
 
         tick = TickData(
@@ -674,11 +677,15 @@ class OkexV5WebsocketApi(WebsocketClient):
         )
         self.ticks[req.symbol] = tick
 
-        channel_ticker = f"swap/ticker:{req.symbol}"
-        channel_depth = f"swap/depth5:{req.symbol}"
-
-        self.callbacks[channel_ticker] = self.on_ticker
-        self.callbacks[channel_depth] = self.on_depth
+        instId = req.symbol
+        channel_ticker = {
+            "channel": "tickers",
+            "instId": instId
+        }
+        channel_depth = {
+            "channel": "books5",
+            "instId": instId
+        }
 
         req = {
             "op": "subscribe",
@@ -686,14 +693,17 @@ class OkexV5WebsocketApi(WebsocketClient):
         }
         self.send_packet(req)
 
-    def on_connected(self):
+    def on_connected(self) -> None:
         """"""
-        self.gateway.write_log("Websocket API连接成功")
-        self.login()
+        self.gateway.write_log("Websocket Public API连接成功")
+        self.subscribe_public_topic()
+
+        for req in list(self.subscribed.values()):
+            self.subscribe(req)
 
     def on_disconnected(self):
         """"""
-        self.gateway.write_log("Websocket API连接断开")
+        self.gateway.write_log("Websocket Public API连接断开")
 
     def on_packet(self, packet: dict):
         """"""
@@ -702,12 +712,140 @@ class OkexV5WebsocketApi(WebsocketClient):
             if event == "subscribe":
                 return
             elif event == "error":
-                msg = packet["message"]
-                self.gateway.write_log(f"Websocket API请求异常：{msg}")
+                code = packet["code"]
+                msg = packet["msg"]
+                self.gateway.write_log(f"Websocket Public API请求异常, 状态码：{code}, 信息{msg}")
+
+        else:
+            channel = packet["arg"]
+            data = packet["data"]
+            callback = self.callbacks.get(channel, None)
+
+            if callback:
+                for d in data:
+                    callback(d)
+
+    def on_error(self, exception_type: type, exception_value: Exception, tb):
+        """"""
+        msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
+        self.gateway.write_log(msg)
+
+        sys.stderr.write(self.exception_detail(exception_type, exception_value, tb))
+
+    def subscribe_public_topic(self):
+        """
+        Subscribe to all public topics.
+        """
+        self.callbacks["ticker"] = self.on_ticker
+        self.callbacks["books5"] = self.on_depth
+
+    def on_ticker(self, d):
+        """"""
+        symbol = d["insrId"]
+        tick = self.ticks.get(symbol, None)
+        if not tick:
+            return
+
+        # Filter last price with 0 value
+        last_price = float(d["last"])
+        if not last_price:
+            return
+
+        tick.last_price = last_price
+        tick.high_price = float(d["high24h"])
+        tick.low_price = float(d["low24h"])
+        tick.volume = float(d["vol24h"])
+        tick.datetime = _parse_timestamp(d["ts"])
+
+        self.gateway.on_tick(copy(tick))
+
+    def on_depth(self, d):
+        """"""
+        symbol = d["instId"]
+        tick = self.ticks.get(symbol, None)
+        if not tick:
+            return
+
+        bids = d["bids"]
+        asks = d["asks"]
+        for n in range(min(5, len(bids))):
+            price, volume, _, _ = bids[n]
+            tick.__setattr__("bid_price_%s" % (n + 1), float(price))
+            tick.__setattr__("bid_volume_%s" % (n + 1), int(volume))
+
+        for n in range(min(5, len(asks))):
+            price, volume, _, _ = asks[n]
+            tick.__setattr__("ask_price_%s" % (n + 1), float(price))
+            tick.__setattr__("ask_volume_%s" % (n + 1), int(volume))
+
+        tick.datetime = _parse_timestamp(d["timestamp"])
+        self.gateway.on_tick(copy(tick))
+
+
+class OkexV5WebsocketPrivateApi(WebsocketClient):
+    """"""
+
+    def __init__(self, gateway):
+        """"""
+        super(OkexV5WebsocketPrivateApi, self).__init__()
+        self.ping_interval = 20  # OKEX use 30 seconds for ping
+
+        self.gateway: OkexV5Gateway = gateway
+        self.gateway_name: str = gateway.gateway_name
+
+        self.usdt_base: bool = False
+
+        self.key = ""
+        self.secret = ""
+        self.passphrase = ""
+
+        self.callbacks = {}
+
+    def connect(
+        self,
+        usdt_base: bool,
+        key: str,
+        secret: str,
+        passphrase: str,
+        proxy_host: str,
+        proxy_port: int,
+        server: str
+    ) -> None:
+        """"""
+        self.usdt_base = usdt_base
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        if server == "REAL":
+            self.init(PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
+        else:
+            self.init(SIMULATED_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
+
+    def on_connected(self):
+        """"""
+        self.gateway.write_log("Websocket Private API连接成功")
+        self.login()
+
+    def on_disconnected(self):
+        """"""
+        self.gateway.write_log("Websocket Private API连接断开")
+
+    def on_packet(self, packet: dict):
+        """"""
+        if "event" in packet:
+            event = packet["event"]
+            if event == "subscribe":
+                return
+            elif event == "error":
+                code = packet["code"]
+                msg = packet["msg"]
+                self.gateway.write_log(f"Websocket Private API请求异常, 状态码：{code}, 信息{msg}")
             elif event == "login":
                 self.on_login(packet)
+
         else:
-            channel = packet["table"]
+            channel = packet["arg"]
             data = packet["data"]
             callback = self.callbacks.get(channel, None)
 
@@ -733,137 +871,90 @@ class OkexV5WebsocketApi(WebsocketClient):
 
         req = {
             "op": "login",
-            "args": [
-                self.key,
-                self.passphrase,
-                timestamp,
-                signature.decode("utf-8")
+            "args":
+            [
+                {
+                    "apiKey": self.key,
+                    "passphrase": self.passphrase,
+                    "timestamp": timestamp,
+                    "sign": signature.decode("utf-8")
+                }
             ]
         }
         self.send_packet(req)
         self.callbacks["login"] = self.on_login
 
-    def subscribe_topic(self):
+    def subscribe_private_topic(self):
         """
         Subscribe to all private topics.
         """
-        self.callbacks["swap/ticker"] = self.on_ticker
-        self.callbacks["swap/depth5"] = self.on_depth
-        self.callbacks["swap/account"] = self.on_account
-        self.callbacks["swap/order"] = self.on_order
-        self.callbacks["swap/position"] = self.on_position
+        self.callbacks["orders"] = self.on_order
+        self.callbacks["account"] = self.on_account
+        self.callbacks["positions"] = self.on_position
 
         # Subscribe to order update
-        channels = []
-        for instrument_id in instruments:
-            channel = f"swap/order:{instrument_id}"
-            channels.append(channel)
-
         req = {
             "op": "subscribe",
-            "args": channels
+            "args": [{
+                "channel": "orders",
+                "instType": "ANY"
+            }]
         }
         self.send_packet(req)
 
         # Subscribe to account update
-        channels = []
-        for instrument in instruments:
-            if instrument != "USD":
-                channel = f"swap/account:{instrument}"
-                channels.append(channel)
 
         req = {
             "op": "subscribe",
-            "args": channels
+            "args": [{
+                "channel": "account"
+            }]
         }
         self.send_packet(req)
 
         # Subscribe to position update
-        channels = []
-        for instrument_id in instruments:
-            channel = f"swap/position:{instrument_id}"
-            channels.append(channel)
-
         req = {
             "op": "subscribe",
-            "args": channels
+            "args": [{
+                "channel": "positions",
+                "instType": "ANY"
+            }]
         }
         self.send_packet(req)
 
     def on_login(self, data: dict):
         """"""
-        success = data.get("success", False)
+        code = data["code"]
 
-        if success:
-            self.gateway.write_log("Websocket API登录成功")
-            self.subscribe_topic()
+        if code == 0:
+            self.gateway.write_log("Websocket Private API登录成功")
+            self.subscribe_private_topic()
 
-            for req in list(self.subscribed.values()):
-                self.subscribe(req)
         else:
-            self.gateway.write_log("Websocket API登录失败")
-
-    def on_ticker(self, d):
-        """"""
-        symbol = d["instrument_id"]
-        tick = self.ticks.get(symbol, None)
-        if not tick:
-            return
-
-        # Filter last price with 0 value
-        last_price = float(d["last"])
-        if not last_price:
-            return
-
-        tick.last_price = last_price
-        tick.high_price = float(d["high_24h"])
-        tick.low_price = float(d["low_24h"])
-        tick.volume = float(d["volume_24h"])
-        tick.datetime = _parse_timestamp(d["timestamp"])
-
-        self.gateway.on_tick(copy(tick))
-
-    def on_depth(self, d):
-        """"""
-        symbol = d["instrument_id"]
-        tick = self.ticks.get(symbol, None)
-        if not tick:
-            return
-
-        bids = d["bids"]
-        asks = d["asks"]
-        for n in range(min(5, len(bids))):
-            price, volume, _, _ = bids[n]
-            tick.__setattr__("bid_price_%s" % (n + 1), float(price))
-            tick.__setattr__("bid_volume_%s" % (n + 1), int(volume))
-
-        for n in range(min(5, len(asks))):
-            price, volume, _, _ = asks[n]
-            tick.__setattr__("ask_price_%s" % (n + 1), float(price))
-            tick.__setattr__("ask_volume_%s" % (n + 1), int(volume))
-
-        tick.datetime = _parse_timestamp(d["timestamp"])
-        self.gateway.on_tick(copy(tick))
+            self.gateway.write_log("Websocket Private API登录失败")
 
     def on_order(self, data):
         """"""
         order = _parse_order_data(data, gateway_name=self.gateway_name)
         self.gateway.on_order(copy(order))
 
-        traded_volume = float(data.get("last_fill_qty", 0))
+        traded_volume = float(data.get("fillSz", 0))
+
+        contract = symbol_contract_map.get(order.symbol, None)
+        if contract:
+            traded_volume = round_to(traded_volume, contract.min_volume)
+
         if traded_volume != 0:
-            tradeid = f"{self.connect_time}{self._last_trade_id}"
-            self._last_trade_id += 1
 
             trade = TradeData(
                 symbol=order.symbol,
                 exchange=order.exchange,
                 orderid=order.orderid,
-                tradeid=tradeid,
+                tradeid=data["tradeId"],
                 direction=order.direction,
                 offset=order.offset,
-                price=float(data["last_fill_px"]),
-                volume=float(traded_volume),
+                price=float(data["fillPx"]),
+                volume=traded_volume,
                 datetime=order.datetime,
                 gateway_name=self.gateway_name,
             )
@@ -877,7 +968,7 @@ class OkexV5WebsocketApi(WebsocketClient):
     def on_position(self, data):
         """"""
         data = data['data']
-        symbol = data['instrument_id']
+        symbol = data['instId']
 
         long_position = PositionData(
             symbol=symbol,
@@ -940,7 +1031,7 @@ def generate_timestamp():
 def _parse_timestamp(timestamp):
     """parse timestamp into local time."""
     timestamp = eval(timestamp)
-    dt = datetime.fromtimestamp(timestamp)
+    dt = datetime.fromtimestamp(timestamp/1000)
     dt = UTC_TZ.localize(dt)
     return dt
 
