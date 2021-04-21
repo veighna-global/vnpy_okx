@@ -40,6 +40,8 @@ from vnpy.trader.object import (
     TickData,
     TradeData
 )
+# from tzlocal import get_localzone
+# LOCAL_TZ = get_localzone()
 
 _ = lambda x: x  # noqa
 REST_HOST = "https://www.okex.com"
@@ -109,7 +111,7 @@ class OkexV5Gateway(BaseGateway):
         "代理地址": "",
         "代理端口": "",
         "服务器": ["SIMULATED", "REAL"],
-        "合约模式": ["反向", "正向"],
+        #"合约模式": ["反向", "正向"],
         "产品类型": ""
     }
 
@@ -140,21 +142,16 @@ class OkexV5Gateway(BaseGateway):
         else:
             self.rest_api.simulated = True
 
-        if setting["合约模式"] == "正向":
-            usdt_base = True
-        else:
-            usdt_base = False
-
         if proxy_port.isdigit():
             proxy_port = int(proxy_port)
         else:
             proxy_port = 0
 
-        self.rest_api.connect(usdt_base, key, secret, passphrase,
+        self.rest_api.connect(key, secret, passphrase,
                               session_number, proxy_host, proxy_port)
-        self.ws_pub_api.connect(usdt_base, proxy_host, proxy_port, server)
-        self.ws_pri_api.connect(usdt_base, key, secret, passphrase, proxy_host,
-                                proxy_port, server)
+        #self.ws_pub_api.connect(proxy_host, proxy_port, server)
+        #self.ws_pri_api.connect(key, secret, passphrase, proxy_host,
+        #                        proxy_port, server)
 
     def subscribe(self, req: SubscribeRequest):
         """"""
@@ -218,7 +215,6 @@ class OkexV5RestApi(RestClient):
         self.connect_time = 0
 
         self.simulated: bool = False
-        self.usdt_base: bool = False
 
     def sign(self, request):
         """
@@ -246,13 +242,12 @@ class OkexV5RestApi(RestClient):
         }
 
         if self.simulated:
-            request.headers["x-simulated-trading"] = 1
+            request.headers["x-simulated-trading"] = "1"
 
         return request
 
     def connect(
         self,
-        usdt_base: bool,
         key: str,
         secret: str,
         passphrase: str,
@@ -263,7 +258,6 @@ class OkexV5RestApi(RestClient):
         """
         Initialize connection to REST server.
         """
-        self.usdt_base = usdt_base
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -350,18 +344,21 @@ class OkexV5RestApi(RestClient):
                         "uly": uly
                     }
                     self._query_contract(data)
+                    # print("1,", data)
             else:
                 data = {
                     "instType": contract
                 }
                 self._query_contract(data)
+                # print("2,", data)
 
     def _query_contract(self, data):
         """"""
+        # print("3,", data)
         self.add_request(
             "GET",
             "/api/v5/public/instruments",
-            data=data,
+            params=data,
             callback=self.on_query_contracts
         )
 
@@ -403,11 +400,15 @@ class OkexV5RestApi(RestClient):
             symbol = d["instId"]
 
             product = PRODUCT_OKEXV52VT[d["instType"]]
+            size = d.get("ctMult", None)
+            if size:
+                size = float(size)
             contract = ContractData(
                 symbol=symbol,
                 exchange=Exchange.OKEX,
                 name=symbol,
                 product=product,
+                size=size,
                 pricetick=float(d["tickSz"]),
                 min_volume=float(d["minSz"]),
                 history_data=True,
@@ -415,7 +416,6 @@ class OkexV5RestApi(RestClient):
             )
 
             if product == Product.OPTION:
-                contract.size = float(d["ctMult"])
                 contract.option_strike = float(d["stk"])
                 contract.option_type = OPTIONTYPE_OKEXO2VT[d["optType"]]
                 contract.option_expiry = _parse_timestamp(d["expTime"])
@@ -431,9 +431,6 @@ class OkexV5RestApi(RestClient):
                 contract.net_position = True
                 contract.size = 1
 
-            else:
-                contract.size = float(d["ctMult"])
-
             self.gateway.on_contract(contract)
 
             symbol_contract_map[contract.symbol] = contract
@@ -441,28 +438,28 @@ class OkexV5RestApi(RestClient):
         self.gateway.write_log("合约信息查询成功")
 
         # Start websocket api after instruments data collected
-        self.gateway.ws_api.start()
+        # self.gateway.ws_pub_api.start()
+        # self.gateway.ws_pri_api.start()
 
         # and query pending orders
         self.query_orders()
 
     def on_query_accounts(self, data, request):
         """"""
-        for details in data['data']:
-            account = _parse_account_details(details,
-                                             gateway_name=self.gateway_name)
-            self.gateway.on_account(account)
+        for d in data["data"]:
+            for detail in d["details"]:
+                account = _parse_account_details(detail,
+                                                 gateway_name=self.gateway_name)
+                self.gateway.on_account(account)
 
         self.gateway.write_log("账户资金查询成功")
 
     def on_query_position(self, datas, request):
         """"""
-        for data in datas:
-            d = data["data"]
-
-            for data in d:
-                symbol = data["instId"].upper()
-                pos = _parse_position_data(data, symbol=symbol,
+        for data in datas["data"]:
+            for d in data:
+                symbol = d["instId"].upper()
+                pos = _parse_position_data(d, symbol=symbol,
                                            gateway_name=self.gateway_name)
                 self.gateway.on_position(pos)
 
@@ -476,7 +473,7 @@ class OkexV5RestApi(RestClient):
     def on_query_time(self, data, request):
         """"""
         timestamp = eval(data["data"][0]["ts"])
-        server_time = datetime.fromtimestamp(timestamp)
+        server_time = datetime.fromtimestamp(timestamp/1000)
         local_time = datetime.utcnow().isoformat()
         msg = f"服务器时间：{server_time}，本机时间：{local_time}"
         self.gateway.write_log(msg)
@@ -657,21 +654,17 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
 
-        self.usdt_base: bool = False
-
         self.subscribed: Dict[str, SubscribeRequest] = {}
         self.callbacks = {}
         self.ticks = {}
 
     def connect(
         self,
-        usdt_base: bool,
         proxy_host: str,
         proxy_port: int,
         server: str
     ) -> None:
         """"""
-        self.usdt_base = usdt_base
 
         if server == "REAL":
             self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
@@ -818,8 +811,6 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
         self.gateway: OkexV5Gateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
-        self.usdt_base: bool = False
-
         self.key = ""
         self.secret = ""
         self.passphrase = ""
@@ -828,7 +819,6 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def connect(
         self,
-        usdt_base: bool,
         key: str,
         secret: str,
         passphrase: str,
@@ -837,7 +827,6 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
         server: str
     ) -> None:
         """"""
-        self.usdt_base = usdt_base
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -989,8 +978,10 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_account(self, data):
         """"""
-        account = _parse_account_details(data, gateway_name=self.gateway_name)
-        self.gateway.on_account(account)
+        for d in data["data"]:
+            for detail in d["details"]:
+                account = _parse_account_details(detail, gateway_name=self.gateway_name)
+                self.gateway.on_account(account)
 
     def on_position(self, data):
         """"""
@@ -1079,14 +1070,14 @@ def _parse_position_data(data, symbol, gateway_name):
     return pos
 
 
-def _parse_account_details(details, gateway_name):
+def _parse_account_details(detail, gateway_name):
     """
     parse single 'details' record inside account reply to AccountData.
     """
     account = AccountData(
-        accountid=details['ccy'].upper(),
-        balance=float(details["eq"]),
-        frozen=float(details["ordFrozen"]),
+        accountid=detail["ccy"].upper(),
+        balance=float(detail["eq"]),
+        frozen=float(detail["ordFrozen"]),
         gateway_name=gateway_name,
     )
     return account
