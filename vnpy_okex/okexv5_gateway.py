@@ -12,7 +12,6 @@ from typing import Dict
 from vnpy.trader.utility import round_to
 
 from requests import ConnectionError
-from pytz import utc as UTC_TZ
 
 from vnpy.api.rest import Request, RestClient
 from vnpy.api.websocket import WebsocketClient
@@ -40,8 +39,8 @@ from vnpy.trader.object import (
     TickData,
     TradeData
 )
-# from tzlocal import get_localzone
-# LOCAL_TZ = get_localzone()
+from tzlocal import get_localzone
+LOCAL_TZ = get_localzone()
 
 _ = lambda x: x  # noqa
 REST_HOST = "https://www.okex.com"
@@ -110,9 +109,7 @@ class OkexV5Gateway(BaseGateway):
         "会话数": 3,
         "代理地址": "",
         "代理端口": "",
-        "服务器": ["SIMULATED", "REAL"],
-        #"合约模式": ["反向", "正向"],
-        "产品类型": ""
+        "服务器": ["SIMULATED", "REAL"]
     }
 
     exchanges = [Exchange.OKEX]
@@ -149,9 +146,9 @@ class OkexV5Gateway(BaseGateway):
 
         self.rest_api.connect(key, secret, passphrase,
                               session_number, proxy_host, proxy_port)
-        #self.ws_pub_api.connect(proxy_host, proxy_port, server)
-        #self.ws_pri_api.connect(key, secret, passphrase, proxy_host,
-        #                        proxy_port, server)
+        self.ws_pub_api.connect(proxy_host, proxy_port, server)
+        self.ws_pri_api.connect(key, secret, passphrase, proxy_host,
+                                proxy_port, server)
 
     def subscribe(self, req: SubscribeRequest):
         """"""
@@ -438,8 +435,8 @@ class OkexV5RestApi(RestClient):
         self.gateway.write_log(msg)
 
         # Start websocket api after instruments data collected
-        # self.gateway.ws_pub_api.start()
-        # self.gateway.ws_pri_api.start()
+        self.gateway.ws_pub_api.start()
+        self.gateway.ws_pri_api.start()
 
         # and query pending orders
         self.query_orders()
@@ -458,7 +455,7 @@ class OkexV5RestApi(RestClient):
         """"""
         for data in datas["data"]:
             for d in data:
-                symbol = d["instId"].upper()
+                symbol = d["instId"]
                 pos = _parse_position_data(d, symbol=symbol,
                                            gateway_name=self.gateway_name)
                 self.gateway.on_position(pos)
@@ -581,7 +578,7 @@ class OkexV5RestApi(RestClient):
         end_time = None
 
         for i in range(10):
-            path = "/api/v5/market/history-candles"
+            path = "/api/v5/market/candles"
 
             # Create query params
             params = {
@@ -628,9 +625,9 @@ class OkexV5RestApi(RestClient):
                     )
                     buf[bar.datetime] = bar
 
-                begin = data[-1][0]
-                end = data[0][0]
-                msg = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{begin} - {end}"
+                begin = data["data"][-1][0]
+                end = data["data"][0][0]
+                msg = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{_parse_timestamp(begin)} - {_parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
                 # Update start time
@@ -675,8 +672,6 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         """
         Subscribe to tick data upate.
         """
-        self.callbacks["tickers"] = self.on_ticker
-        self.callbacks["books5"] = self.on_depth
 
         if req.symbol not in symbol_contract_map:
             self.gateway.write_log(f"找不到该合约代码{req.symbol}")
@@ -688,7 +683,7 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
             symbol=req.symbol,
             exchange=req.exchange,
             name=req.symbol,
-            datetime=datetime.now(UTC_TZ),
+            datetime=datetime.now(),
             gateway_name=self.gateway_name,
         )
         self.ticks[req.symbol] = tick
@@ -705,16 +700,24 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
 
         req = {
             "op": "subscribe",
-            "args": [channel_ticker, channel_depth]
+            "args": [channel_ticker]
+        }
+        self.send_packet(req)
+
+        req = {
+            "op": "subscribe",
+            "args": [channel_depth]
         }
         self.send_packet(req)
 
     def on_connected(self) -> None:
         """"""
         self.gateway.write_log("Websocket Public API连接成功")
-        self.subscribe_public_topic()
+        self.callbacks["ticker"] = self.on_ticker
+        self.callbacks["books5"] = self.on_depth
 
         for req in list(self.subscribed.values()):
+            pass
             self.subscribe(req)
 
     def on_disconnected(self):
@@ -743,19 +746,12 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
 
     def on_error(self, exception_type: type, exception_value: Exception, tb):
         """"""
-        msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
+        msg = f"公共频道触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
         sys.stderr.write(
             self.exception_detail(exception_type, exception_value, tb)
         )
-
-    def subscribe_public_topic(self):
-        """
-        Subscribe to all public topics.
-        """
-        self.callbacks["ticker"] = self.on_ticker
-        self.callbacks["books5"] = self.on_depth
 
     def on_ticker(self, d):
         """"""
@@ -859,7 +855,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
                 self.on_login(packet)
 
         else:
-            channel = packet["arg"]
+            channel = packet["arg"]["channel"]
             data = packet["data"]
             callback = self.callbacks.get(channel, None)
 
@@ -869,7 +865,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_error(self, exception_type: type, exception_value: Exception, tb):
         """"""
-        msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
+        msg = f"私有频道触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
         sys.stderr.write(
@@ -942,7 +938,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
         """"""
         code = data["code"]
 
-        if code == 0:
+        if code == '0':
             self.gateway.write_log("Websocket Private API登录成功")
             self.subscribe_private_topic()
 
@@ -951,66 +947,42 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_order(self, data):
         """"""
-        order = _parse_order_data(data, gateway_name=self.gateway_name)
-        self.gateway.on_order(copy(order))
-
-        traded_volume = float(data.get("fillSz", 0))
-
-        contract = symbol_contract_map.get(order.symbol, None)
-        if contract:
-            traded_volume = round_to(traded_volume, contract.min_volume)
-
-        if traded_volume != 0:
-
-            trade = TradeData(
-                symbol=order.symbol,
-                exchange=order.exchange,
-                orderid=order.orderid,
-                tradeid=data["tradeId"],
-                direction=order.direction,
-                offset=order.offset,
-                price=float(data["fillPx"]),
-                volume=traded_volume,
-                datetime=order.datetime,
-                gateway_name=self.gateway_name,
-            )
-            self.gateway.on_trade(trade)
+        for d in data:
+            order = _parse_order_data(d, gateway_name=self.gateway_name)
+            self.gateway.on_order(copy(order))
+    
+            traded_volume = float(data.get("fillSz", 0))
+    
+            contract = symbol_contract_map.get(order.symbol, None)
+            if contract:
+                traded_volume = round_to(traded_volume, contract.min_volume)
+    
+            if traded_volume != 0:
+    
+                trade = TradeData(
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    orderid=order.orderid,
+                    tradeid=data["tradeId"],
+                    direction=order.direction,
+                    offset=order.offset,
+                    price=float(data["fillPx"]),
+                    volume=traded_volume,
+                    datetime=order.datetime,
+                    gateway_name=self.gateway_name,
+                )
+                self.gateway.on_trade(trade)
 
     def on_account(self, data):
         """"""
-        for d in data["data"]:
-            for detail in d["details"]:
-                account = _parse_account_details(detail, gateway_name=self.gateway_name)
-                self.gateway.on_account(account)
+        for detail in data["details"]:
+            account = _parse_account_details(detail, gateway_name=self.gateway_name)
+            self.gateway.on_account(account)
 
     def on_position(self, data):
         """"""
-        data = data['data']
-#        symbol = data['instId']
-#
-#        long_position = PositionData(
-#            symbol=symbol,
-#            exchange=Exchange.OKEX,
-#            direction=Direction.LONG,
-#            gateway_name=self.gateway_name
-#        )
-#
-#        short_position = PositionData(
-#            symbol=symbol,
-#            exchange=Exchange.OKEX,
-#            direction=Direction.SHORT,
-#            gateway_name=self.gateway_name
-#        )
-#
-#        net_position = PositionData(
-#            symbol=symbol,
-#            exchange=Exchange.OKEX,
-#            direction=Direction.NET,
-#            gateway_name=self.gateway_name
-#        )
-
         for d in data:
-            symbol = d["instId"].upper()
+            symbol = d["instId"]
             if d["posSide"] == "long":
                 long_position = _parse_position_data(
                     data=d,
@@ -1051,7 +1023,7 @@ def _parse_timestamp(timestamp):
     """parse timestamp into local time."""
     timestamp = eval(timestamp)
     dt = datetime.fromtimestamp(timestamp/1000)
-    dt = UTC_TZ.localize(dt)
+    dt = LOCAL_TZ.localize(dt)
     return dt
 
 
@@ -1076,7 +1048,7 @@ def _parse_account_details(detail, gateway_name):
     parse single 'details' record inside account reply to AccountData.
     """
     account = AccountData(
-        accountid=detail["ccy"].upper(),
+        accountid=detail["ccy"],
         balance=float(detail["eq"]),
         frozen=float(detail["ordFrozen"]),
         gateway_name=gateway_name,
