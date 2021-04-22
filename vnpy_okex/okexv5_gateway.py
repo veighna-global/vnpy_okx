@@ -344,17 +344,14 @@ class OkexV5RestApi(RestClient):
                         "uly": uly
                     }
                     self._query_contract(data)
-                    # print("1,", data)
             else:
                 data = {
                     "instType": contract
                 }
                 self._query_contract(data)
-                # print("2,", data)
 
     def _query_contract(self, data):
         """"""
-        # print("3,", data)
         self.add_request(
             "GET",
             "/api/v5/public/instruments",
@@ -396,6 +393,8 @@ class OkexV5RestApi(RestClient):
 
     def on_query_contracts(self, data, request):
         """"""
+        if not data["data"]:
+            return
         for d in data["data"]:
             symbol = d["instId"]
 
@@ -435,7 +434,8 @@ class OkexV5RestApi(RestClient):
 
             symbol_contract_map[contract.symbol] = contract
 
-        self.gateway.write_log("合约信息查询成功")
+        msg = f"{PRODUCT_VT2OKEXV5[product]}合约信息查询成功"
+        self.gateway.write_log(msg)
 
         # Start websocket api after instruments data collected
         # self.gateway.ws_pub_api.start()
@@ -474,7 +474,7 @@ class OkexV5RestApi(RestClient):
         """"""
         timestamp = eval(data["data"][0]["ts"])
         server_time = datetime.fromtimestamp(timestamp/1000)
-        local_time = datetime.utcnow().isoformat()
+        local_time = datetime.now()
         msg = f"服务器时间：{server_time}，本机时间：{local_time}"
         self.gateway.write_log(msg)
 
@@ -986,30 +986,31 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
     def on_position(self, data):
         """"""
         data = data['data']
-        symbol = data['instId']
-
-        long_position = PositionData(
-            symbol=symbol,
-            exchange=Exchange.OKEX,
-            direction=Direction.LONG,
-            gateway_name=self.gateway_name
-        )
-
-        short_position = PositionData(
-            symbol=symbol,
-            exchange=Exchange.OKEX,
-            direction=Direction.SHORT,
-            gateway_name=self.gateway_name
-        )
-
-        net_position = PositionData(
-            symbol=symbol,
-            exchange=Exchange.OKEX,
-            direction=Direction.NET,
-            gateway_name=self.gateway_name
-        )
+#        symbol = data['instId']
+#
+#        long_position = PositionData(
+#            symbol=symbol,
+#            exchange=Exchange.OKEX,
+#            direction=Direction.LONG,
+#            gateway_name=self.gateway_name
+#        )
+#
+#        short_position = PositionData(
+#            symbol=symbol,
+#            exchange=Exchange.OKEX,
+#            direction=Direction.SHORT,
+#            gateway_name=self.gateway_name
+#        )
+#
+#        net_position = PositionData(
+#            symbol=symbol,
+#            exchange=Exchange.OKEX,
+#            direction=Direction.NET,
+#            gateway_name=self.gateway_name
+#        )
 
         for d in data:
+            symbol = d["instId"].upper()
             if d["posSide"] == "long":
                 long_position = _parse_position_data(
                     data=d,
