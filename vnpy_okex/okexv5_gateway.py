@@ -662,7 +662,6 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         server: str
     ) -> None:
         """"""
-
         if server == "REAL":
             self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
         else:
@@ -672,7 +671,6 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         """
         Subscribe to tick data upate.
         """
-
         if req.symbol not in symbol_contract_map:
             self.gateway.write_log(f"找不到该合约代码{req.symbol}")
             return
@@ -700,24 +698,16 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
 
         req = {
             "op": "subscribe",
-            "args": [channel_ticker]
-        }
-        self.send_packet(req)
-
-        req = {
-            "op": "subscribe",
-            "args": [channel_depth]
+            "args": [channel_ticker, channel_depth]
         }
         self.send_packet(req)
 
     def on_connected(self) -> None:
         """"""
         self.gateway.write_log("Websocket Public API连接成功")
-        self.callbacks["ticker"] = self.on_ticker
-        self.callbacks["books5"] = self.on_depth
+        self.subscribe_public_topic()
 
         for req in list(self.subscribed.values()):
-            pass
             self.subscribe(req)
 
     def on_disconnected(self):
@@ -736,7 +726,7 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
                 self.gateway.write_log(f"Websocket Public API请求异常, 状态码：{code}, 信息{msg}")
 
         else:
-            channel = packet["arg"]
+            channel = packet["arg"]["channel"]
             data = packet["data"]
             callback = self.callbacks.get(channel, None)
 
@@ -753,9 +743,19 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
             self.exception_detail(exception_type, exception_value, tb)
         )
 
+    def subscribe_public_topic(self):
+        """
+        Subscribe to public topics.
+        """
+        self.callbacks["tickers"] = self.on_ticker
+        self.callbacks["books5"] = self.on_depth
+
+        req = SubscribeRequest("BTC-USDT", Exchange.OKEX)
+        self.subscribe(req)
+
     def on_ticker(self, d):
         """"""
-        symbol = d["insrId"]
+        symbol = d["instId"]
         tick = self.ticks.get(symbol, None)
         if not tick:
             return
@@ -766,6 +766,7 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
             return
 
         tick.last_price = last_price
+        tick.open_price = float(d["open24h"])
         tick.high_price = float(d["high24h"])
         tick.low_price = float(d["low24h"])
         tick.volume = float(d["vol24h"])
@@ -785,14 +786,14 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         for n in range(min(5, len(bids))):
             price, volume, _, _ = bids[n]
             tick.__setattr__("bid_price_%s" % (n + 1), float(price))
-            tick.__setattr__("bid_volume_%s" % (n + 1), int(volume))
+            tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
 
         for n in range(min(5, len(asks))):
             price, volume, _, _ = asks[n]
             tick.__setattr__("ask_price_%s" % (n + 1), float(price))
-            tick.__setattr__("ask_volume_%s" % (n + 1), int(volume))
+            tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
 
-        tick.datetime = _parse_timestamp(d["timestamp"])
+        tick.datetime = _parse_timestamp(d["ts"])
         self.gateway.on_tick(copy(tick))
 
 
@@ -894,6 +895,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
             ]
         }
         self.send_packet(req)
+
         self.callbacks["login"] = self.on_login
 
     def subscribe_private_topic(self):
