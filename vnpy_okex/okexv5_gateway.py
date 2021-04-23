@@ -68,6 +68,8 @@ SIDE_OKEXV52VT = {
     "sell": Direction.SHORT
 }
 
+SIDE_VT2OKEXV5 = {v: k for k, v in SIDE_OKEXV52VT.items()}
+
 DIRECTION_OKEXV52VT = {
     "long": Direction.LONG,
     "short": Direction.SHORT,
@@ -271,6 +273,7 @@ class OkexV5RestApi(RestClient):
         self.query_position()
 
     def _new_order_id(self):
+        """"""
         with self.order_count_lock:
             self.order_count += 1
             return self.order_count
@@ -283,7 +286,7 @@ class OkexV5RestApi(RestClient):
             "instId": req.symbol,
             "tdMode": "cross",
             "clOrdId": orderid,
-            "side": SIDE_OKEXV52VT[req.direction],
+            "side": SIDE_VT2OKEXV5[req.direction],
             "ordType": ORDERTYPE_VT2OKEXV5[req.type],
             "px": str(req.price),
             "sz": str(req.volume)
@@ -298,6 +301,8 @@ class OkexV5RestApi(RestClient):
                 data["posSide"] = "short"
             else:
                 data["posSide"] = "long"
+        elif req.offset == Offset.NONE:
+            data["posSide"] = "net"
 
         order = req.create_order_data(orderid, self.gateway_name)
 
@@ -317,7 +322,8 @@ class OkexV5RestApi(RestClient):
     def cancel_order(self, req: CancelRequest):
         """"""
         data = {
-            "clOrdId": req.orderid
+            "clOrdId": req.orderid,
+            "instID": req.symbol
         }
         self.add_request(
             "POST",
@@ -462,6 +468,7 @@ class OkexV5RestApi(RestClient):
 
     def on_query_order(self, data, request):
         """"""
+        print("query_order,", data)
         for order_info in data["data"]:
             order = _parse_order_data(order_info,
                                       gateway_name=self.gateway_name)
@@ -479,7 +486,7 @@ class OkexV5RestApi(RestClient):
         """
         Callback when sending order failed on server.
         """
-
+        print("r18")
         order = request.extra
         order.status = Status.REJECTED
         order.time = datetime.now().strftime("%H:%M:%S.%f")
@@ -497,7 +504,6 @@ class OkexV5RestApi(RestClient):
         """
         Callback when sending order caused exception.
         """
-
         order = request.extra
         order.status = Status.REJECTED
         self.gateway.on_order(order)
@@ -511,12 +517,15 @@ class OkexV5RestApi(RestClient):
         Websocket will push a new order status
         """
         order = request.extra
-        error_msg = data["error_message"]
-        if error_msg:
+        if data["code"] != "0":
             order.status = Status.REJECTED
             self.gateway.on_order(order)
 
-            self.gateway.write_log(f"委托失败：{error_msg}")
+            for d in data["data"]:
+                code = d["sCode"]
+                msg = d["sMsg"]
+
+            self.gateway.write_log(f"委托失败, 状态码：{code}, 信息{msg}")
 
     def on_cancel_order_error(
         self,
@@ -528,6 +537,7 @@ class OkexV5RestApi(RestClient):
         """
         Callback when cancelling order failed on server.
         """
+        print("r21")
         # Record exception if not ConnectionError
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
@@ -536,12 +546,14 @@ class OkexV5RestApi(RestClient):
         """
         Websocket will push a new order status
         """
+        print("CANCEL", data)
         pass
 
     def on_cancel_order_failed(self, status_code: int, request: Request):
         """
         If cancel failed, mark order status to be rejected.
         """
+        print("r23")
         req = request.extra
         order = self.gateway.get_order(req.orderid)
         if order:
@@ -552,6 +564,7 @@ class OkexV5RestApi(RestClient):
         """
         Callback to handle request failed.
         """
+        print("r24")
         msg = f"请求失败，状态码：{status_code}，信息：{request.response.text}"
         self.gateway.write_log(msg)
 
@@ -805,8 +818,8 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
         super(OkexV5WebsocketPrivateApi, self).__init__()
         self.ping_interval = 20  # OKEX use 30 seconds for ping
 
-        self.gateway: OkexV5Gateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        self.gateway = gateway
+        self.gateway_name = gateway.gateway_name
 
         self.key = ""
         self.secret = ""
@@ -938,9 +951,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_login(self, data: dict):
         """"""
-        code = data["code"]
-
-        if code == '0':
+        if data["code"] == '0':
             self.gateway.write_log("Websocket Private API登录成功")
             self.subscribe_private_topic()
 
@@ -949,6 +960,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_order(self, data):
         """"""
+        print("R_10")
         for d in data:
             order = _parse_order_data(d, gateway_name=self.gateway_name)
             self.gateway.on_order(copy(order))
@@ -983,6 +995,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_position(self, data):
         """"""
+        print("R_12")
         for d in data:
             symbol = d["instId"]
             if d["posSide"] == "long":
