@@ -53,7 +53,9 @@ SIMULATED_PRIVATE_WEBSOCKET_HOST = "wss://wspap.okex.com:8443/ws/v5/private?brok
 
 STATUS_OKEXV52VT = {
     "live": Status.NOTTRADED,
-    "partially_filled": Status.PARTTRADED
+    "partially_filled": Status.PARTTRADED,
+    "filed": Status.ALLTRADED,
+    "canceled": Status.CANCELLED
 }
 
 ORDERTYPE_OKEXV52VT = {
@@ -280,8 +282,13 @@ class OkexV5RestApi(RestClient):
 
     def send_order(self, req: OrderRequest):
         """"""
-        orderid = f"a{self.connect_time}{self._new_order_id()}"
+        contract = symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.gateway.write_log(f"找不到该合约代码{req.symbol}")
+            return
 
+        orderid = f"a{self.connect_time}{self._new_order_id()}"
+    
         data = {
             "instId": req.symbol,
             "tdMode": "cross",
@@ -301,9 +308,10 @@ class OkexV5RestApi(RestClient):
                 data["posSide"] = "short"
             else:
                 data["posSide"] = "long"
-        elif req.offset == Offset.NONE:
-            data["posSide"] = "net"
 
+        if contract.product == Product.SPOT:
+            data["tdMode"] =  "cash"
+        
         order = req.create_order_data(orderid, self.gateway_name)
 
         self.add_request(
@@ -468,7 +476,6 @@ class OkexV5RestApi(RestClient):
 
     def on_query_order(self, data, request):
         """"""
-        print("query_order,", data)
         for order_info in data["data"]:
             order = _parse_order_data(order_info,
                                       gateway_name=self.gateway_name)
@@ -546,7 +553,6 @@ class OkexV5RestApi(RestClient):
         """
         Websocket will push a new order status
         """
-        print("CANCEL", data)
         pass
 
     def on_cancel_order_failed(self, status_code: int, request: Request):
@@ -960,32 +966,30 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_order(self, data):
         """"""
-        print("R_10")
-        for d in data:
-            order = _parse_order_data(d, gateway_name=self.gateway_name)
-            self.gateway.on_order(copy(order))
+        order = _parse_order_data(data, gateway_name=self.gateway_name)
+        self.gateway.on_order(copy(order))
     
-            traded_volume = float(data.get("fillSz", 0))
+        traded_volume = float(data.get("fillSz", 0))
     
-            contract = symbol_contract_map.get(order.symbol, None)
-            if contract:
-                traded_volume = round_to(traded_volume, contract.min_volume)
+        contract = symbol_contract_map.get(order.symbol, None)
+        if contract:
+            traded_volume = round_to(traded_volume, contract.min_volume)
     
-            if traded_volume != 0:
+        if traded_volume != 0:
     
-                trade = TradeData(
-                    symbol=order.symbol,
-                    exchange=order.exchange,
-                    orderid=order.orderid,
-                    tradeid=data["tradeId"],
-                    direction=order.direction,
-                    offset=order.offset,
-                    price=float(data["fillPx"]),
-                    volume=traded_volume,
-                    datetime=order.datetime,
-                    gateway_name=self.gateway_name,
-                )
-                self.gateway.on_trade(trade)
+            trade = TradeData(
+                symbol=order.symbol,
+                exchange=order.exchange,
+                orderid=order.orderid,
+                tradeid=data["tradeId"],
+                direction=order.direction,
+                offset=order.offset,
+                price=float(data["fillPx"]),
+                volume=traded_volume,
+                datetime=order.datetime,
+                gateway_name=self.gateway_name,
+            )
+            self.gateway.on_trade(trade)
 
     def on_account(self, data):
         """"""
@@ -995,7 +999,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_position(self, data):
         """"""
-        print("R_12")
+        print("R_12,", data)
         for d in data:
             symbol = d["instId"]
             if d["posSide"] == "long":
@@ -1010,7 +1014,7 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
                     symbol=symbol,
                     gateway_name=self.gateway_name
                 )
-            elif d["posSide"] == "net":
+            else:
                 net_position = _parse_position_data(
                     data=d,
                     symbol=symbol,
@@ -1045,10 +1049,14 @@ def _parse_timestamp(timestamp):
 def _parse_position_data(data, symbol, gateway_name):
     """parse single 'data' record in replied position data to PositionData. """
     position = int(data["pos"])
+    direction = DIRECTION_OKEXV52VT.get(data['posSide'], None)
+    if not direction:
+        direction = Direction.NET
+
     pos = PositionData(
         symbol=symbol,
         exchange=Exchange.OKEX,
-        direction=DIRECTION_OKEXV52VT[data['posSide']],
+        direction=direction,
         volume=position,
         frozen=float(position - float(data["availPos"])),
         price=float(data['avgPx']),
@@ -1072,7 +1080,7 @@ def _parse_account_details(detail, gateway_name):
 
 
 def _parse_order_data(data, gateway_name: str):
-    posside = DIRECTION_OKEXV52VT[data["posSide"]]
+    posside = DIRECTION_OKEXV52VT.get(data["posSide"], None)
     side = SIDE_OKEXV52VT[data["side"]]
 
     order_id = data["clOrdId"]
@@ -1091,7 +1099,7 @@ def _parse_order_data(data, gateway_name: str):
         status=STATUS_OKEXV52VT[data["state"]],
         gateway_name=gateway_name,
     )
-    if posside == Direction.NET:
+    if not posside or posside == Direction.NET:
         order.offset == Offset.NONE
     elif posside == Direction.LONG:
         if side == Direction.LONG:
