@@ -54,7 +54,7 @@ SIMULATED_PRIVATE_WEBSOCKET_HOST = "wss://wspap.okex.com:8443/ws/v5/private?brok
 STATUS_OKEXV52VT = {
     "live": Status.NOTTRADED,
     "partially_filled": Status.PARTTRADED,
-    "filed": Status.ALLTRADED,
+    "filled": Status.ALLTRADED,
     "canceled": Status.CANCELLED
 }
 
@@ -101,7 +101,7 @@ OPTIONTYPE_OKEXO2VT = {
 symbol_contract_map: Dict[str, ContractData] = {}
 
 
-class OkexV5Gateway(BaseGateway):
+class OkexGateway(BaseGateway):
     """
     VN Trader Gateway for OKEX connection.
     """
@@ -120,11 +120,11 @@ class OkexV5Gateway(BaseGateway):
 
     def __init__(self, event_engine):
         """Constructor"""
-        super().__init__(event_engine, "OKEXV5")
+        super().__init__(event_engine, "OKEX")
 
-        self.rest_api = OkexV5RestApi(self)
-        self.ws_pub_api = OkexV5WebsocketPublicApi(self)
-        self.ws_pri_api = OkexV5WebsocketPrivateApi(self)
+        self.rest_api = OkexRestApi(self)
+        self.ws_pub_api = OkexWebsocketPublicApi(self)
+        self.ws_pri_api = OkexWebsocketPrivateApi(self)
 
         self.orders = {}
 
@@ -194,14 +194,14 @@ class OkexV5Gateway(BaseGateway):
         return self.orders.get(orderid, None)
 
 
-class OkexV5RestApi(RestClient):
+class OkexRestApi(RestClient):
     """
     OKEX V5 REST API
     """
 
-    def __init__(self, gateway: "OkexV5Gateway"):
+    def __init__(self, gateway: "OkexGateway"):
         """"""
-        super(OkexV5RestApi, self).__init__()
+        super(OkexRestApi, self).__init__()
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
@@ -288,15 +288,13 @@ class OkexV5RestApi(RestClient):
             return
 
         orderid = f"a{self.connect_time}{self._new_order_id()}"
-    
+ 
         data = {
             "instId": req.symbol,
-            "tdMode": "cross",
             "clOrdId": orderid,
             "side": SIDE_VT2OKEXV5[req.direction],
             "ordType": ORDERTYPE_VT2OKEXV5[req.type],
-            "px": str(req.price),
-            "sz": str(req.volume)
+            "px": str(req.price)
         }
         if req.offset == Offset.OPEN:
             if req.direction == Direction.LONG:
@@ -311,7 +309,11 @@ class OkexV5RestApi(RestClient):
 
         if contract.product == Product.SPOT:
             data["tdMode"] =  "cash"
-        
+            data["sz"] = str(req.volume)
+        else:
+            data["tdMode"] =  "cross"
+            data["sz"] = str(int(req.volume))
+
         order = req.create_order_data(orderid, self.gateway_name)
 
         self.add_request(
@@ -468,11 +470,10 @@ class OkexV5RestApi(RestClient):
     def on_query_position(self, datas, request):
         """"""
         for data in datas["data"]:
-            for d in data:
-                symbol = d["instId"]
-                pos = _parse_position_data(d, symbol=symbol,
-                                           gateway_name=self.gateway_name)
-                self.gateway.on_position(pos)
+            symbol = data["instId"]
+            pos = _parse_position_data(data, symbol=symbol,
+                                       gateway_name=self.gateway_name)
+            self.gateway.on_position(pos)
 
     def on_query_order(self, data, request):
         """"""
@@ -493,7 +494,6 @@ class OkexV5RestApi(RestClient):
         """
         Callback when sending order failed on server.
         """
-        print("r18")
         order = request.extra
         order.status = Status.REJECTED
         order.time = datetime.now().strftime("%H:%M:%S.%f")
@@ -532,7 +532,10 @@ class OkexV5RestApi(RestClient):
                 code = d["sCode"]
                 msg = d["sMsg"]
 
-            self.gateway.write_log(f"委托失败, 状态码：{code}, 信息{msg}")
+            if code == "51000":
+                self.gateway.write_log(f"委托失败, 状态码：{code}, 信息{msg}。请检查持仓方向")
+            else:
+                self.gateway.write_log(f"委托失败, 状态码：{code}, 信息{msg}")
 
     def on_cancel_order_error(
         self,
@@ -544,7 +547,6 @@ class OkexV5RestApi(RestClient):
         """
         Callback when cancelling order failed on server.
         """
-        print("r21")
         # Record exception if not ConnectionError
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
@@ -559,7 +561,6 @@ class OkexV5RestApi(RestClient):
         """
         If cancel failed, mark order status to be rejected.
         """
-        print("r23")
         req = request.extra
         order = self.gateway.get_order(req.orderid)
         if order:
@@ -570,7 +571,6 @@ class OkexV5RestApi(RestClient):
         """
         Callback to handle request failed.
         """
-        print("r24")
         msg = f"请求失败，状态码：{status_code}，信息：{request.response.text}"
         self.gateway.write_log(msg)
 
@@ -659,12 +659,12 @@ class OkexV5RestApi(RestClient):
         return history
 
 
-class OkexV5WebsocketPublicApi(WebsocketClient):
+class OkexWebsocketPublicApi(WebsocketClient):
     """"""
 
     def __init__(self, gateway):
         """"""
-        super(OkexV5WebsocketPublicApi, self).__init__()
+        super(OkexWebsocketPublicApi, self).__init__()
         self.ping_interval = 20  # OKEX use 30 seconds for ping
 
         self.gateway = gateway
@@ -816,12 +816,12 @@ class OkexV5WebsocketPublicApi(WebsocketClient):
         self.gateway.on_tick(copy(tick))
 
 
-class OkexV5WebsocketPrivateApi(WebsocketClient):
+class OkexWebsocketPrivateApi(WebsocketClient):
     """"""
 
     def __init__(self, gateway):
         """"""
-        super(OkexV5WebsocketPrivateApi, self).__init__()
+        super(OkexWebsocketPrivateApi, self).__init__()
         self.ping_interval = 20  # OKEX use 30 seconds for ping
 
         self.gateway = gateway
@@ -999,31 +999,28 @@ class OkexV5WebsocketPrivateApi(WebsocketClient):
 
     def on_position(self, data):
         """"""
-        print("R_12,", data)
-        for d in data:
-            symbol = d["instId"]
-            if d["posSide"] == "long":
-                long_position = _parse_position_data(
-                    data=d,
-                    symbol=symbol,
-                    gateway_name=self.gateway_name
-                )
-            elif d["posSide"] == "short":
-                short_position = _parse_position_data(
-                    data=d,
-                    symbol=symbol,
-                    gateway_name=self.gateway_name
-                )
-            else:
-                net_position = _parse_position_data(
-                    data=d,
-                    symbol=symbol,
-                    gateway_name=self.gateway_name
-                )
-
-        self.gateway.on_position(long_position)
-        self.gateway.on_position(short_position)
-        self.gateway.on_position(net_position)
+        symbol = data["instId"]
+        if data["posSide"] == "long":
+            long_position = _parse_position_data(
+                data=data,
+                symbol=symbol,
+                gateway_name=self.gateway_name
+            )
+            self.gateway.on_position(long_position)
+        elif data["posSide"] == "short":
+            short_position = _parse_position_data(
+                data=data,
+                symbol=symbol,
+                gateway_name=self.gateway_name
+            )
+            self.gateway.on_position(short_position)
+        else:
+            net_position = _parse_position_data(
+                data=data,
+                symbol=symbol,
+                gateway_name=self.gateway_name
+            )
+            self.gateway.on_position(net_position)
 
 
 def generate_signature(msg: str, secret_key: str):
@@ -1053,14 +1050,29 @@ def _parse_position_data(data, symbol, gateway_name):
     if not direction:
         direction = Direction.NET
 
+    if data["availPos"]:
+        availpos = float(data["availPos"])
+    else:
+        availpos = 0
+
+    if data["avgPx"]:
+        price = float(data['avgPx'])
+    else:
+        price = 0
+
+    if data["upl"]:
+        pnl = float(data['upl'])
+    else:
+        pnl = 0
+
     pos = PositionData(
         symbol=symbol,
         exchange=Exchange.OKEX,
         direction=direction,
         volume=position,
-        frozen=float(position - float(data["availPos"])),
-        price=float(data['avgPx']),
-        pnl=float(data['upl']),
+        frozen=float(position - availpos),
+        price=price,
+        pnl=pnl,
         gateway_name=gateway_name,
     )
     return pos
@@ -1100,15 +1112,15 @@ def _parse_order_data(data, gateway_name: str):
         gateway_name=gateway_name,
     )
     if not posside or posside == Direction.NET:
-        order.offset == Offset.NONE
+        order.offset = Offset.NONE
     elif posside == Direction.LONG:
         if side == Direction.LONG:
-            order.offset == Offset.OPEN
+            order.offset = Offset.OPEN
         else:
-            order.offset == Offset.CLOSE
+            order.offset = Offset.CLOSE
     else:
         if side == Direction.LONG:
-            order.offset == Offset.CLOSE
+            order.offset = Offset.CLOSE
         else:
-            order.offset == Offset.OPEN
+            order.offset = Offset.OPEN
     return order

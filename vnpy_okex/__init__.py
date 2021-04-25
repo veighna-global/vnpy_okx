@@ -1,1 +1,1 @@
-from .okexv5_gateway import OkexV5Gateway
+from .okex_gateway import OkexGateway
