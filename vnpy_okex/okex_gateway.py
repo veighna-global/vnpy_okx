@@ -282,13 +282,20 @@ class OkexRestApi(RestClient):
 
     def send_order(self, req: OrderRequest):
         """"""
+        # 只支持单币种保证金模式。若需基于简单交易模式或跨币种保证金模式交易，请基于官方API文档自行调整发出的"tdMode"字段
+        # Only applicable to the Single-currency margin mode. Sending orders based on other modes needs to adjust the "tdMode" parameter
+        # 只支持全仓模式
+        # Only applicable to cross mode
+        # 只有币币交易和期权交易支持净仓模式，下单时请注意持仓方向
+        # Net position is only applicable to Cross SPOT/Cross OPTION trade mode. Please check the posSide when sending orders
+
         contract = symbol_contract_map.get(req.symbol, None)
         if not contract:
             self.gateway.write_log(f"找不到该合约代码{req.symbol}")
             return
 
         orderid = f"a{self.connect_time}{self._new_order_id()}"
- 
+
         data = {
             "instId": req.symbol,
             "clOrdId": orderid,
@@ -308,10 +315,10 @@ class OkexRestApi(RestClient):
                 data["posSide"] = "long"
 
         if contract.product == Product.SPOT:
-            data["tdMode"] =  "cash"
+            data["tdMode"] = "cash"
             data["sz"] = str(req.volume)
         else:
-            data["tdMode"] =  "cross"
+            data["tdMode"] = "cross"
             data["sz"] = str(int(req.volume))
 
         order = req.create_order_data(orderid, self.gateway_name)
@@ -593,6 +600,11 @@ class OkexRestApi(RestClient):
 
     def query_history(self, req: HistoryRequest):
         """"""
+        # K线数据每个粒度最多可获取最近1440条
+        # This endpoint can retrieve the latest 1,440 data entries. Charts are returned in groups based on the requested bar
+        # 若需获取获取最近几年的历史k线数据(仅主流币)，可参考官方API文档自行调用"/api/v5/market/history-candles"接口
+        # History candlestick charts from recent years(top currencies only) can be obtained through "/api/v5/market/history-candles" request
+
         buf = {}
         end_time = None
 
@@ -649,7 +661,7 @@ class OkexRestApi(RestClient):
                 msg = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{_parse_timestamp(begin)} - {_parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
-                # Update start time
+                # Update end time
                 end_time = begin
 
         index = list(buf.keys())
@@ -968,15 +980,15 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         """"""
         order = _parse_order_data(data, gateway_name=self.gateway_name)
         self.gateway.on_order(copy(order))
-    
+
         traded_volume = float(data.get("fillSz", 0))
-    
+
         contract = symbol_contract_map.get(order.symbol, None)
         if contract:
             traded_volume = round_to(traded_volume, contract.min_volume)
-    
+
         if traded_volume != 0:
-    
+
             trade = TradeData(
                 symbol=order.symbol,
                 exchange=order.exchange,
@@ -994,7 +1006,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
     def on_account(self, data):
         """"""
         for detail in data["details"]:
-            account = _parse_account_details(detail, gateway_name=self.gateway_name)
+            account = _parse_account_details(detail,
+                                             gateway_name=self.gateway_name)
             self.gateway.on_account(account)
 
     def on_position(self, data):
