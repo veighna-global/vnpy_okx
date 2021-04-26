@@ -596,7 +596,7 @@ class OkexRestApi(RestClient):
         buf = {}
         end_time = None
 
-        for i in range(10):
+        for i in range(15):
             path = "/api/v5/market/candles"
 
             # Create query params
