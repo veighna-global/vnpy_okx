@@ -40,17 +40,22 @@ from vnpy.trader.object import (
     TradeData
 )
 from tzlocal import get_localzone
-LOCAL_TZ = get_localzone()
+LOCAL_TZ = get_localzone()                # 获取本地时区
 
 _ = lambda x: x  # noqa
+
+# 实盘/模拟盘REST API地址
 REST_HOST = "https://www.okex.com"
 
+# 实盘Websocket API地址
 PUBLIC_WEBSOCKET_HOST = "wss://ws.okex.com:8443/ws/v5/public"
 PRIVATE_WEBSOCKET_HOST = "wss://ws.okex.com:8443/ws/v5/private"
 
+# 模拟盘Websocket API地址
 SIMULATED_PUBLIC_WEBSOCKET_HOST = "wss://wspap.okex.com:8443/ws/v5/public?brokerId=9999"
 SIMULATED_PRIVATE_WEBSOCKET_HOST = "wss://wspap.okex.com:8443/ws/v5/private?brokerId=9999"
 
+# 委托状态映射
 STATUS_OKEXV52VT = {
     "live": Status.NOTTRADED,
     "partially_filled": Status.PARTTRADED,
@@ -58,6 +63,7 @@ STATUS_OKEXV52VT = {
     "canceled": Status.CANCELLED
 }
 
+# 委托类型映射
 ORDERTYPE_OKEXV52VT = {
     "market": OrderType.MARKET,
     "limit": OrderType.LIMIT
@@ -65,6 +71,7 @@ ORDERTYPE_OKEXV52VT = {
 
 ORDERTYPE_VT2OKEXV5 = {v: k for k, v in ORDERTYPE_OKEXV52VT.items()}
 
+# 开平方向映射
 SIDE_OKEXV52VT = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
@@ -78,12 +85,14 @@ DIRECTION_OKEXV52VT = {
     "net": Direction.NET
 }
 
+# 数据频率映射
 INTERVAL_VT2OKEXV5 = {
     Interval.MINUTE: "1m",
     Interval.HOUR: "1H",
     Interval.DAILY: "1D",
 }
 
+# 产品类型映射
 PRODUCT_OKEXV52VT = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
@@ -93,11 +102,13 @@ PRODUCT_OKEXV52VT = {
 
 PRODUCT_VT2OKEXV5 = {v: k for k, v in PRODUCT_OKEXV52VT.items()}
 
+# 期权类型映射
 OPTIONTYPE_OKEXO2VT = {
     "C": OptionType.CALL,
     "P": OptionType.PUT
 }
 
+# 合约数据全局缓存字典
 symbol_contract_map: Dict[str, ContractData] = {}
 
 
@@ -221,7 +232,7 @@ class OkexRestApi(RestClient):
         """
         Generate OKEX V5 signature.
         """
-        # Sign
+        # 签名
         timestamp = generate_timestamp()
         request.data = json.dumps(request.data)
 
@@ -233,7 +244,7 @@ class OkexRestApi(RestClient):
         msg = timestamp + request.method + path + request.data
         signature = generate_signature(msg, self.secret)
 
-        # Add headers
+        # 添加请求头
         request.headers = {
             "OK-ACCESS-KEY": self.key,
             "OK-ACCESS-SIGN": signature,
@@ -283,11 +294,10 @@ class OkexRestApi(RestClient):
     def send_order(self, req: OrderRequest):
         """"""
         # 只支持单币种保证金模式。若需基于简单交易模式或跨币种保证金模式交易，请基于官方API文档自行调整发出的"tdMode"字段
-        # Only applicable to the Single-currency margin mode. Sending orders based on other modes needs to adjust the "tdMode" parameter
+
         # 只支持全仓模式
-        # Only applicable to cross mode
+
         # 只有币币交易和期权交易支持净仓模式，下单时请注意持仓方向
-        # Net position is only applicable to Cross SPOT/Cross OPTION trade mode. Please check the posSide when sending orders
 
         contract = symbol_contract_map.get(req.symbol, None)
         if not contract:
@@ -457,11 +467,11 @@ class OkexRestApi(RestClient):
         msg = f"{PRODUCT_VT2OKEXV5[product]}合约信息查询成功"
         self.gateway.write_log(msg)
 
-        # Start websocket api after instruments data collected
+        # 查询合约信息完毕后启动Websocket API
         self.gateway.ws_pub_api.start()
         self.gateway.ws_pri_api.start()
 
-        # and query pending orders
+        # 查询合约信息完毕后查询未成交订单
         self.query_orders()
 
     def on_query_accounts(self, data, request):
@@ -522,7 +532,6 @@ class OkexRestApi(RestClient):
         order.status = Status.REJECTED
         self.gateway.on_order(order)
 
-        # Record exception if not ConnectionError
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
 
@@ -554,7 +563,6 @@ class OkexRestApi(RestClient):
         """
         Callback when cancelling order failed on server.
         """
-        # Record exception if not ConnectionError
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
 
@@ -608,9 +616,8 @@ class OkexRestApi(RestClient):
     def query_history(self, req: HistoryRequest):
         """"""
         # K线数据每个粒度最多可获取最近1440条
-        # This endpoint can retrieve the latest 1,440 data entries. Charts are returned in groups based on the requested bar
-        # 若需获取获取最近几年的历史k线数据(仅主流币)，可参考官方API文档自行调用"/api/v5/market/history-candles"接口
-        # History candlestick charts from recent years(top currencies only) can be obtained through "/api/v5/market/history-candles" request
+
+        # 如需获取近几年的历史k线数据(仅主流币)，可参考官方API文档自行调用"/api/v5/market/history-candles"接口
 
         buf = {}
         end_time = None
@@ -618,7 +625,7 @@ class OkexRestApi(RestClient):
         for i in range(15):
             path = "/api/v5/market/candles"
 
-            # Create query params
+            # 创建查询参数
             params = {
                 "instId": req.symbol,
                 "bar": INTERVAL_VT2OKEXV5[req.interval]
@@ -627,14 +634,14 @@ class OkexRestApi(RestClient):
             if end_time:
                 params["after"] = end_time
 
-            # Get response from server
+            # 从服务端获取响应
             resp = self.request(
                 "GET",
                 path,
                 params=params
             )
 
-            # Break if request failed with other status code
+            # 如果请求失败则终止循环
             if resp.status_code // 100 != 2:
                 msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
                 self.gateway.write_log(msg)
@@ -668,7 +675,7 @@ class OkexRestApi(RestClient):
                 msg = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{_parse_timestamp(begin)} - {_parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
-                # Update end time
+                # 更新结束时间
                 end_time = begin
 
         index = list(buf.keys())
@@ -684,7 +691,7 @@ class OkexWebsocketPublicApi(WebsocketClient):
     def __init__(self, gateway):
         """"""
         super(OkexWebsocketPublicApi, self).__init__()
-        self.ping_interval = 20  # OKEX use 30 seconds for ping
+        self.ping_interval = 20
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
@@ -798,7 +805,7 @@ class OkexWebsocketPublicApi(WebsocketClient):
         if not tick:
             return
 
-        # Filter last price with 0 value
+        # 过滤掉最新成交价为0的数据
         last_price = float(d["last"])
         if not last_price:
             return
@@ -841,7 +848,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
     def __init__(self, gateway):
         """"""
         super(OkexWebsocketPrivateApi, self).__init__()
-        self.ping_interval = 20  # OKEX use 30 seconds for ping
+        self.ping_interval = 20
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
@@ -944,7 +951,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         self.callbacks["account"] = self.on_account
         self.callbacks["positions"] = self.on_position
 
-        # Subscribe to order update
+        # 订阅订单频道
         req = {
             "op": "subscribe",
             "args": [{
@@ -954,7 +961,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         }
         self.send_packet(req)
 
-        # Subscribe to account update
+        # 订阅账户频道
 
         req = {
             "op": "subscribe",
@@ -964,7 +971,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         }
         self.send_packet(req)
 
-        # Subscribe to position update
+        # 订阅持仓频道
         req = {
             "op": "subscribe",
             "args": [{
