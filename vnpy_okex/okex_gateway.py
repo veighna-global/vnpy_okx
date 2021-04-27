@@ -562,7 +562,14 @@ class OkexRestApi(RestClient):
         """
         Websocket will push a new order status
         """
-        pass
+        code = data["code"]
+        if code == "0":
+            self.gateway.write_log("撤单成功")
+        else:
+            for d in data["data"]:
+                code = d["sCode"]
+                msg = d["sMsg"]
+                self.gateway.write_log(f"撤单失败, 状态码：{code}, 信息{msg}")
 
     def on_cancel_order_failed(self, status_code: int, request: Request):
         """
