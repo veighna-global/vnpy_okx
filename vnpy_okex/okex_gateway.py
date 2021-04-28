@@ -8,7 +8,8 @@ from copy import copy
 from datetime import datetime
 from threading import Lock
 from urllib.parse import urlencode
-from typing import Dict
+from typing import Dict, Optional, Any, List
+from vnpy.event.engine import EventEngine
 from vnpy.trader.utility import round_to
 
 from requests import ConnectionError
@@ -114,7 +115,7 @@ symbol_contract_map: Dict[str, ContractData] = {}
 
 class OkexGateway(BaseGateway):
     """
-    VN Trader Gateway for OKEX connection.
+    vn.py用于对接欧易统一账户的交易接口。
     """
 
     default_setting = {
@@ -129,25 +130,25 @@ class OkexGateway(BaseGateway):
 
     exchanges = [Exchange.OKEX]
 
-    def __init__(self, event_engine):
-        """Constructor"""
-        super().__init__(event_engine, "OKEX")
+    def __init__(self, event_engine: EventEngine, gateway_name: str = "OKEX") -> None:
+        """构造函数"""
+        super().__init__(event_engine, gateway_name)
 
-        self.rest_api = OkexRestApi(self)
-        self.ws_pub_api = OkexWebsocketPublicApi(self)
-        self.ws_pri_api = OkexWebsocketPrivateApi(self)
+        self.rest_api: "OkexRestApi" = OkexRestApi(self)
+        self.ws_pub_api: "OkexWebsocketPublicApi" = OkexWebsocketPublicApi(self)
+        self.ws_pri_api: "OkexWebsocketPrivateApi" = OkexWebsocketPrivateApi(self)
 
         self.orders = {}
 
-    def connect(self, setting: dict):
-        """"""
-        key = setting["API Key"]
-        secret = setting["Secret Key"]
-        passphrase = setting["Passphrase"]
-        session_number = setting["会话数"]
-        proxy_host = setting["代理地址"]
-        proxy_port = setting["代理端口"]
-        server = setting["服务器"]
+    def connect(self, setting: dict) -> None:
+        """连接交易接口"""
+        key: str = setting["API Key"]
+        secret: str = setting["Secret Key"]
+        passphrase: str = setting["Passphrase"]
+        session_number: int = setting["会话数"]
+        proxy_host: str = setting["代理地址"]
+        proxy_port: str = setting["代理端口"]
+        server: str = setting["服务器"]
 
         if server == "REAL":
             self.rest_api.simulated = False
@@ -165,54 +166,52 @@ class OkexGateway(BaseGateway):
         self.ws_pri_api.connect(key, secret, passphrase, proxy_host,
                                 proxy_port, server)
 
-    def subscribe(self, req: SubscribeRequest):
-        """"""
+    def subscribe(self, req: SubscribeRequest) -> None:
+        """订阅行情"""
         self.ws_pub_api.subscribe(req)
 
-    def send_order(self, req: OrderRequest):
-        """"""
+    def send_order(self, req: OrderRequest) -> str:
+        """委托下单"""
         return self.rest_api.send_order(req)
 
-    def cancel_order(self, req: CancelRequest):
-        """"""
+    def cancel_order(self, req: CancelRequest) -> None:
+        """委托撤单"""
         self.rest_api.cancel_order(req)
 
-    def query_account(self):
-        """"""
+    def query_account(self) -> None:
+        """查询资金"""
         pass
 
-    def query_position(self):
-        """"""
+    def query_position(self) -> None:
+        """查询持仓"""
         pass
 
-    def query_history(self, req: HistoryRequest):
-        """"""
+    def query_history(self, req: HistoryRequest) -> List[BarData]:
+        """查询历史数据"""
         return self.rest_api.query_history(req)
 
-    def close(self):
-        """"""
+    def close(self) -> None:
+        """关闭连接"""
         self.rest_api.stop()
         self.ws_pub_api.stop()
         self.ws_pri_api.stop()
 
-    def on_order(self, order: OrderData):
-        """"""
+    def on_order(self, order: OrderData) -> None:
+        """推送委托"""
         self.orders[order.orderid] = order
         super().on_order(order)
 
-    def get_order(self, orderid: str):
-        """"""
+    def get_order(self, orderid: str) -> Optional[OrderData]:
+        """获取委托"""
         return self.orders.get(orderid, None)
 
 
 class OkexRestApi(RestClient):
-    """
-    OKEX V5 REST API
-    """
+    """"""
 
-    def __init__(self, gateway: "OkexGateway"):
-        """"""
-        super(OkexRestApi, self).__init__()
+    def __init__(self, gateway: OkexGateway) -> None:
+        """构造函数"""
+        super().__init__()
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
@@ -228,10 +227,8 @@ class OkexRestApi(RestClient):
 
         self.simulated: bool = False
 
-    def sign(self, request):
-        """
-        Generate OKEX V5 signature.
-        """
+    def sign(self, request) -> Any:
+        """生成欧易V5签名"""
         # 签名
         timestamp = generate_timestamp()
         request.data = json.dumps(request.data)
@@ -266,10 +263,8 @@ class OkexRestApi(RestClient):
         session_number: int,
         proxy_host: str,
         proxy_port: int,
-    ):
-        """
-        Initialize connection to REST server.
-        """
+    ) -> None:
+        """连接REST服务器"""
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -285,14 +280,14 @@ class OkexRestApi(RestClient):
         self.query_accounts()
         self.query_position()
 
-    def _new_order_id(self):
-        """"""
+    def _new_order_id(self) -> int:
+        """本地委托计数"""
         with self.order_count_lock:
             self.order_count += 1
             return self.order_count
 
-    def send_order(self, req: OrderRequest):
-        """"""
+    def send_order(self, req: OrderRequest) -> str:
+        """委托下单"""
         # 只支持单币种保证金模式。若需基于简单交易模式或跨币种保证金模式交易，请基于官方API文档自行调整发出的"tdMode"字段
 
         # 只支持全仓模式
@@ -304,6 +299,7 @@ class OkexRestApi(RestClient):
             self.gateway.write_log(f"找不到该合约代码{req.symbol}")
             return
 
+        # 生成本地委托号
         orderid = f"a{self.connect_time}{self._new_order_id()}"
 
         data = {
@@ -346,8 +342,8 @@ class OkexRestApi(RestClient):
         self.gateway.on_order(order)
         return order.vt_orderid
 
-    def cancel_order(self, req: CancelRequest):
-        """"""
+    def cancel_order(self, req: CancelRequest) -> None:
+        """委托撤单"""
         data = {
             "clOrdId": req.orderid,
             "instID": req.symbol
@@ -362,8 +358,8 @@ class OkexRestApi(RestClient):
             extra=req
         )
 
-    def query_contract(self):
-        """"""
+    def query_contract(self) -> None:
+        """查询合约"""
         contracts = ["SPOT", "SWAP", "FUTURES", "OPTION"]
         ulys = ["EOS-USD", "ETH-USD", "BTC-USD"]
         for contract in contracts:
@@ -380,8 +376,8 @@ class OkexRestApi(RestClient):
                 }
                 self._query_contract(data)
 
-    def _query_contract(self, data):
-        """"""
+    def _query_contract(self, data) -> None:
+        """查询合约请求"""
         self.add_request(
             "GET",
             "/api/v5/public/instruments",
@@ -389,40 +385,40 @@ class OkexRestApi(RestClient):
             callback=self.on_query_contracts
         )
 
-    def query_accounts(self):
-        """"""
+    def query_accounts(self) -> None:
+        """查询资金"""
         self.add_request(
             "GET",
             "/api/v5/account/balance",
             callback=self.on_query_accounts
         )
 
-    def query_orders(self):
-        """"""
+    def query_orders(self) -> None:
+        """查询未成交委托"""
         self.add_request(
             "GET",
             "/api/v5/trade/orders-pending",
             callback=self.on_query_order,
         )
 
-    def query_position(self):
-        """"""
+    def query_position(self) -> None:
+        """查询持仓"""
         self.add_request(
             "GET",
             "/api/v5/account/positions",
             callback=self.on_query_position
         )
 
-    def query_time(self):
-        """"""
+    def query_time(self) -> None:
+        """查询时间"""
         self.add_request(
             "GET",
             "/api/v5/public/time",
             callback=self.on_query_time
         )
 
-    def on_query_contracts(self, data, request):
-        """"""
+    def on_query_contracts(self, data, request) -> None:
+        """合约查询回报"""
         if not data["data"]:
             return
         for d in data["data"]:
@@ -474,8 +470,8 @@ class OkexRestApi(RestClient):
         # 查询合约信息完毕后查询未成交订单
         self.query_orders()
 
-    def on_query_accounts(self, data, request):
-        """"""
+    def on_query_accounts(self, data, request) -> None:
+        """资金查询回报"""
         for d in data["data"]:
             for detail in d["details"]:
                 account = _parse_account_details(detail,
@@ -484,33 +480,31 @@ class OkexRestApi(RestClient):
 
         self.gateway.write_log("账户资金查询成功")
 
-    def on_query_position(self, datas, request):
-        """"""
+    def on_query_position(self, datas, request) -> None:
+        """持仓查询回报"""
         for data in datas["data"]:
             symbol = data["instId"]
             pos = _parse_position_data(data, symbol=symbol,
                                        gateway_name=self.gateway_name)
             self.gateway.on_position(pos)
 
-    def on_query_order(self, data, request):
-        """"""
+    def on_query_order(self, data, request) -> None:
+        """未成交委托查询回报"""
         for order_info in data["data"]:
             order = _parse_order_data(order_info,
                                       gateway_name=self.gateway_name)
             self.gateway.on_order(order)
 
-    def on_query_time(self, data, request):
-        """"""
+    def on_query_time(self, data, request) -> None:
+        """时间查询回报"""
         timestamp = eval(data["data"][0]["ts"])
         server_time = datetime.fromtimestamp(timestamp/1000)
         local_time = datetime.now()
         msg = f"服务器时间：{server_time}，本机时间：{local_time}"
         self.gateway.write_log(msg)
 
-    def on_send_order_failed(self, status_code: str, request: Request):
-        """
-        Callback when sending order failed on server.
-        """
+    def on_send_order_failed(self, status_code: str, request: Request) -> None:
+        """委托下单失败服务器报错回报"""
         order = request.extra
         order.status = Status.REJECTED
         order.time = datetime.now().strftime("%H:%M:%S.%f")
@@ -524,10 +518,8 @@ class OkexRestApi(RestClient):
         exception_value: Exception,
         tb,
         request: Request
-    ):
-        """
-        Callback when sending order caused exception.
-        """
+    ) -> None:
+        """委托下单回报函数报错回报"""
         order = request.extra
         order.status = Status.REJECTED
         self.gateway.on_order(order)
@@ -535,10 +527,8 @@ class OkexRestApi(RestClient):
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
 
-    def on_send_order(self, data, request):
-        """
-        Websocket will push a new order status
-        """
+    def on_send_order(self, data, request) -> None:
+        """Websocket推送的委托下单状态回报"""
         order = request.extra
         if data["code"] != "0":
             order.status = Status.REJECTED
@@ -559,17 +549,13 @@ class OkexRestApi(RestClient):
         exception_value: Exception,
         tb,
         request: Request
-    ):
-        """
-        Callback when cancelling order failed on server.
-        """
+    ) -> None:
+        """委托撤单回报函数报错回报"""
         if not issubclass(exception_type, ConnectionError):
             self.on_error(exception_type, exception_value, tb, request)
 
-    def on_cancel_order(self, data, request):
-        """
-        Websocket will push a new order status
-        """
+    def on_cancel_order(self, data, request) -> None:
+        """Websocket推送的委托撤单状态回报"""
         code = data["code"]
         if code == "0":
             self.gateway.write_log("撤单成功")
@@ -579,20 +565,16 @@ class OkexRestApi(RestClient):
                 msg = d["sMsg"]
                 self.gateway.write_log(f"撤单失败, 状态码：{code}, 信息{msg}")
 
-    def on_cancel_order_failed(self, status_code: int, request: Request):
-        """
-        If cancel failed, mark order status to be rejected.
-        """
+    def on_cancel_order_failed(self, status_code: int, request: Request) -> None:
+        """委托撤单失败服务器报错回报"""
         req = request.extra
         order = self.gateway.get_order(req.orderid)
         if order:
             order.status = Status.REJECTED
             self.gateway.on_order(order)
 
-    def on_failed(self, status_code: int, request: Request):
-        """
-        Callback to handle request failed.
-        """
+    def on_failed(self, status_code: int, request: Request) -> None:
+        """请求失败回报"""
         msg = f"请求失败，状态码：{status_code}，信息：{request.response.text}"
         self.gateway.write_log(msg)
 
@@ -602,10 +584,8 @@ class OkexRestApi(RestClient):
         exception_value: Exception,
         tb,
         request: Request
-    ):
-        """
-        Callback to handler request exception.
-        """
+    ) -> None:
+        """触发异常回报"""
         msg = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
@@ -613,8 +593,8 @@ class OkexRestApi(RestClient):
             self.exception_detail(exception_type, exception_value, tb, request)
         )
 
-    def query_history(self, req: HistoryRequest):
-        """"""
+    def query_history(self, req: HistoryRequest) -> List[BarData]:
+        """查询历史数据"""
         # K线数据每个粒度最多可获取最近1440条
 
         # 如需获取近几年的历史k线数据(仅主流币)，可参考官方API文档自行调用"/api/v5/market/history-candles"接口
@@ -634,7 +614,7 @@ class OkexRestApi(RestClient):
             if end_time:
                 params["after"] = end_time
 
-            # 从服务端获取响应
+            # 从服务器获取响应
             resp = self.request(
                 "GET",
                 path,
@@ -688,9 +668,9 @@ class OkexRestApi(RestClient):
 class OkexWebsocketPublicApi(WebsocketClient):
     """"""
 
-    def __init__(self, gateway):
-        """"""
-        super(OkexWebsocketPublicApi, self).__init__()
+    def __init__(self, gateway: OkexGateway) -> None:
+        """构造函数"""
+        super().__init__()
         self.ping_interval = 20
 
         self.gateway = gateway
@@ -706,16 +686,14 @@ class OkexWebsocketPublicApi(WebsocketClient):
         proxy_port: int,
         server: str
     ) -> None:
-        """"""
+        """连接Websocket公共频道"""
         if server == "REAL":
             self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
         else:
             self.init(SIMULATED_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
 
-    def subscribe(self, req: SubscribeRequest):
-        """
-        Subscribe to tick data upate.
-        """
+    def subscribe(self, req: SubscribeRequest) -> None:
+        """订阅行情"""
         if req.symbol not in symbol_contract_map:
             self.gateway.write_log(f"找不到该合约代码{req.symbol}")
             return
@@ -748,19 +726,19 @@ class OkexWebsocketPublicApi(WebsocketClient):
         self.send_packet(req)
 
     def on_connected(self) -> None:
-        """"""
+        """连接成功回报"""
         self.gateway.write_log("Websocket Public API连接成功")
         self.subscribe_public_topic()
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
-    def on_disconnected(self):
-        """"""
+    def on_disconnected(self) -> None:
+        """连接断开回报"""
         self.gateway.write_log("Websocket Public API连接断开")
 
-    def on_packet(self, packet: dict):
-        """"""
+    def on_packet(self, packet: dict) -> None:
+        """推送数据回报"""
         if "event" in packet:
             event = packet["event"]
             if event == "subscribe":
@@ -779,8 +757,8 @@ class OkexWebsocketPublicApi(WebsocketClient):
                 for d in data:
                     callback(d)
 
-    def on_error(self, exception_type: type, exception_value: Exception, tb):
-        """"""
+    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+        """触发异常回报"""
         msg = f"公共频道触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
@@ -788,18 +766,16 @@ class OkexWebsocketPublicApi(WebsocketClient):
             self.exception_detail(exception_type, exception_value, tb)
         )
 
-    def subscribe_public_topic(self):
-        """
-        Subscribe to public topics.
-        """
+    def subscribe_public_topic(self) -> None:
+        """订阅公共频道"""
         self.callbacks["tickers"] = self.on_ticker
         self.callbacks["books5"] = self.on_depth
 
         req = SubscribeRequest("BTC-USDT", Exchange.OKEX)
         self.subscribe(req)
 
-    def on_ticker(self, d):
-        """"""
+    def on_ticker(self, d) -> None:
+        """订阅行情回报"""
         symbol = d["instId"]
         tick = self.ticks.get(symbol, None)
         if not tick:
@@ -819,8 +795,8 @@ class OkexWebsocketPublicApi(WebsocketClient):
 
         self.gateway.on_tick(copy(tick))
 
-    def on_depth(self, d):
-        """"""
+    def on_depth(self, d) -> None:
+        """订阅深度行情回报"""
         symbol = d["instId"]
         tick = self.ticks.get(symbol, None)
         if not tick:
@@ -845,9 +821,9 @@ class OkexWebsocketPublicApi(WebsocketClient):
 class OkexWebsocketPrivateApi(WebsocketClient):
     """"""
 
-    def __init__(self, gateway):
-        """"""
-        super(OkexWebsocketPrivateApi, self).__init__()
+    def __init__(self, gateway: OkexGateway) -> None:
+        """构造函数"""
+        super().__init__()
         self.ping_interval = 20
 
         self.gateway = gateway
@@ -868,7 +844,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         proxy_port: int,
         server: str
     ) -> None:
-        """"""
+        """连接Websocket私有频道"""
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -878,17 +854,17 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         else:
             self.init(SIMULATED_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
 
-    def on_connected(self):
-        """"""
+    def on_connected(self) -> None:
+        """连接成功回报"""
         self.gateway.write_log("Websocket Private API连接成功")
         self.login()
 
-    def on_disconnected(self):
-        """"""
+    def on_disconnected(self) -> None:
+        """连接断开回报"""
         self.gateway.write_log("Websocket Private API连接断开")
 
-    def on_packet(self, packet: dict):
-        """"""
+    def on_packet(self, packet: dict) -> None:
+        """推送数据回报"""
         if "event" in packet:
             event = packet["event"]
             if event == "subscribe":
@@ -909,8 +885,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
                 for d in data:
                     callback(d)
 
-    def on_error(self, exception_type: type, exception_value: Exception, tb):
-        """"""
+    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+        """触发异常回报"""
         msg = f"私有频道触发异常，状态码：{exception_type}，信息：{exception_value}"
         self.gateway.write_log(msg)
 
@@ -918,10 +894,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             self.exception_detail(exception_type, exception_value, tb)
         )
 
-    def login(self):
-        """
-        Need to login befores subscribe to websocket topic.
-        """
+    def login(self) -> None:
+        """用户登录"""
         timestamp = str(time.time())
 
         msg = timestamp + "GET" + "/users/self/verify"
@@ -943,10 +917,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
         self.callbacks["login"] = self.on_login
 
-    def subscribe_private_topic(self):
-        """
-        Subscribe to all private topics.
-        """
+    def subscribe_private_topic(self) -> None:
+        """订阅私有频道"""
         self.callbacks["orders"] = self.on_order
         self.callbacks["account"] = self.on_account
         self.callbacks["positions"] = self.on_position
@@ -981,8 +953,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         }
         self.send_packet(req)
 
-    def on_login(self, data: dict):
-        """"""
+    def on_login(self, data: dict) -> None:
+        """用户登录请求回报"""
         if data["code"] == '0':
             self.gateway.write_log("Websocket Private API登录成功")
             self.subscribe_private_topic()
@@ -990,8 +962,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         else:
             self.gateway.write_log("Websocket Private API登录失败")
 
-    def on_order(self, data):
-        """"""
+    def on_order(self, data) -> None:
+        """委托更新推送"""
         order = _parse_order_data(data, gateway_name=self.gateway_name)
         self.gateway.on_order(copy(order))
 
@@ -1017,15 +989,15 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             )
             self.gateway.on_trade(trade)
 
-    def on_account(self, data):
-        """"""
+    def on_account(self, data) -> None:
+        """资金更新推送"""
         for detail in data["details"]:
             account = _parse_account_details(detail,
                                              gateway_name=self.gateway_name)
             self.gateway.on_account(account)
 
-    def on_position(self, data):
-        """"""
+    def on_position(self, data) -> None:
+        """持仓更新推送"""
         symbol = data["instId"]
         if data["posSide"] == "long":
             long_position = _parse_position_data(
@@ -1050,28 +1022,28 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             self.gateway.on_position(net_position)
 
 
-def generate_signature(msg: str, secret_key: str):
-    """OKEX V5 signature"""
+def generate_signature(msg: str, secret_key: str) -> bytes:
+    """欧易V5签名"""
     return base64.b64encode(hmac.new(secret_key, msg.encode(), hashlib.sha256).digest())
 
 
-def generate_timestamp():
-    """"""
+def generate_timestamp() -> str:
+    """生成时间戳"""
     now = datetime.utcnow()
     timestamp = now.isoformat("T", "milliseconds")
     return timestamp + "Z"
 
 
-def _parse_timestamp(timestamp):
-    """parse timestamp into local time."""
+def _parse_timestamp(timestamp) -> datetime:
+    """解析回报时间戳"""
     timestamp = eval(timestamp)
     dt = datetime.fromtimestamp(timestamp/1000)
     dt = LOCAL_TZ.localize(dt)
     return dt
 
 
-def _parse_position_data(data, symbol, gateway_name):
-    """parse single 'data' record in replied position data to PositionData. """
+def _parse_position_data(data, symbol, gateway_name) -> PositionData:
+    """解析回报数据为PositionData"""
     position = int(data["pos"])
     direction = DIRECTION_OKEXV52VT.get(data['posSide'], None)
     if not direction:
@@ -1105,10 +1077,8 @@ def _parse_position_data(data, symbol, gateway_name):
     return pos
 
 
-def _parse_account_details(detail, gateway_name):
-    """
-    parse single 'details' record inside account reply to AccountData.
-    """
+def _parse_account_details(detail, gateway_name) -> AccountData:
+    """解析回报数据为AccountData"""
     account = AccountData(
         accountid=detail["ccy"],
         balance=float(detail["eq"]),
@@ -1118,7 +1088,8 @@ def _parse_account_details(detail, gateway_name):
     return account
 
 
-def _parse_order_data(data, gateway_name: str):
+def _parse_order_data(data, gateway_name: str) -> OrderData:
+    """解析回报数据为OrderData"""
     posside = DIRECTION_OKEXV52VT.get(data["posSide"], None)
     side = SIDE_OKEXV52VT[data["side"]]
 
