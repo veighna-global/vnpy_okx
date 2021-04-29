@@ -49,7 +49,7 @@ from vnpy.trader.object import (
     TradeData
 )
 
-
+# 中国时区
 CHINA_TZ: timezone = timezone("Asia/Shanghai")
 
 # 实盘和模拟盘REST API地址
@@ -79,7 +79,7 @@ ORDERTYPE_OKEX2VT: Dict[str, OrderType] = {
 }
 ORDERTYPE_VT2OKEX = {v: k for k, v in ORDERTYPE_OKEX2VT.items()}
 
-# 开平方向映射
+# 买卖方向映射
 DIRECTION_OKEX2VT: Dict[str, Direction] = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
@@ -137,8 +137,8 @@ class OkexGateway(BaseGateway):
         super().__init__(event_engine, gateway_name)
 
         self.rest_api: "OkexRestApi" = OkexRestApi(self)
-        self.ws_pub_api: "OkexWebsocketPublicApi" = OkexWebsocketPublicApi(self)
-        self.ws_pri_api: "OkexWebsocketPrivateApi" = OkexWebsocketPrivateApi(self)
+        self.ws_public_api: "OkexWebsocketPublicApi" = OkexWebsocketPublicApi(self)
+        self.ws_private_api: "OkexWebsocketPrivateApi" = OkexWebsocketPrivateApi(self)
 
         self.orders: Dict[str, OrderData] = {}
 
@@ -166,13 +166,12 @@ class OkexGateway(BaseGateway):
             proxy_port,
             server
         )
-
-        self.ws_pub_api.connect(
+        self.ws_public_api.connect(
             proxy_host,
             proxy_port,
             server
         )
-        self.ws_pri_api.connect(
+        self.ws_private_api.connect(
             key,
             secret,
             passphrase,
@@ -183,15 +182,15 @@ class OkexGateway(BaseGateway):
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """订阅行情"""
-        self.ws_pub_api.subscribe(req)
+        self.ws_public_api.subscribe(req)
 
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
-        return self.ws_pri_api.send_order(req)
+        return self.ws_private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """委托撤单"""
-        self.ws_pri_api.cancel_order(req)
+        self.ws_private_api.cancel_order(req)
 
     def query_account(self) -> None:
         """查询资金"""
@@ -207,8 +206,9 @@ class OkexGateway(BaseGateway):
 
     def close(self) -> None:
         """关闭连接"""
-        self.ws_pub_api.stop()
-        self.ws_pri_api.stop()
+        self.rest_api.stop()
+        self.ws_public_api.stop()
+        self.ws_private_api.stop()
 
     def on_order(self, order: OrderData) -> None:
         """推送委托数据"""
@@ -757,19 +757,16 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         """持仓更新推送"""
         data: list = packet["data"]
         for d in data:
-            symbol: str = data["instId"]
-            pos: int = float(data["pos"])
-            direction: Direction = DIRECTION_OKEX2VT[data["posSide"]]
-            availpos: float = get_float_value(data, "availPos")
-            price: float = get_float_value(data, "avgPx")
-            pnl: float = get_float_value(data, "upl")
+            symbol: str = d["instId"]
+            pos: int = float(d["pos"])
+            price: float = get_float_value(d, "avgPx")
+            pnl: float = get_float_value(d, "upl")
 
             position: PositionData = PositionData(
                 symbol=symbol,
                 exchange=Exchange.OKEX,
-                direction=direction,
+                direction=Direction.NET,
                 volume=pos,
-                frozen=pos - availpos,
                 price=price,
                 pnl=pnl,
                 gateway_name=self.gateway_name,
@@ -947,9 +944,10 @@ def parse_timestamp(timestamp: str) -> datetime:
 
 def get_float_value(data: dict, key: str) -> float:
     """获取字典中对应键的浮点数值"""
-    if key not in data:
+    data_str = data.get(key, "")
+    if not data_str:
         return 0.0
-    return float(data[key])
+    return float(data_str)
 
 
 def parse_order_data(data: dict, gateway_name: str) -> OrderData:
