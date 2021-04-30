@@ -77,7 +77,7 @@ ORDERTYPE_OKEX2VT: Dict[str, OrderType] = {
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
 }
-ORDERTYPE_VT2OKEX = {v: k for k, v in ORDERTYPE_OKEX2VT.items()}
+ORDERTYPE_VT2OKEX: Dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKEX2VT.items()}
 
 # 买卖方向映射
 DIRECTION_OKEX2VT: Dict[str, Direction] = {
