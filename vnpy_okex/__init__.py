@@ -20,7 +20,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import importlib_metadata
+
 from .okex_gateway import OkexGateway
 
 
-__version__ = "2021.4.21.1"
+__version__ = importlib_metadata.version("vnpy_okex")
