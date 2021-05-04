@@ -904,6 +904,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         # 推送提交中事件
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.gateway.on_order(order)
+        return order.vt_orderid
 
     def cancel_order(self, req: CancelRequest) -> None:
         """委托撤单"""
