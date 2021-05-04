@@ -441,9 +441,9 @@ class OkexWebsocketPublicApi(WebsocketClient):
     ) -> None:
         """连接Websocket公共频道"""
         if server == "REAL":
-            self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
+            self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
         else:
-            self.init(TEST_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port)
+            self.init(TEST_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
 
         self.start()
 
@@ -658,9 +658,9 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
         if server == "REAL":
-            self.init(PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
+            self.init(PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
         else:
-            self.init(TEST_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port)
+            self.init(TEST_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
 
         self.start()
 
