@@ -419,8 +419,6 @@ class OkexWebsocketPublicApi(WebsocketClient):
         """构造函数"""
         super().__init__()
 
-        self.ping_interval: int = 20
-
         self.gateway: OkexGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
@@ -616,8 +614,6 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         """构造函数"""
         super().__init__()
 
-        self.ping_interval: int = 20
-
         self.gateway: OkexGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
@@ -742,6 +738,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
     def on_account(self, packet: dict) -> None:
         """资金更新推送"""
+        if len(packet["data"]) == 0:
+            return
         buf: dict = packet["data"][0]
         for detail in buf["details"]:
             account: AccountData = AccountData(
