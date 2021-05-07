@@ -21,8 +21,6 @@ from requests import Response
 from pytz import timezone
 
 from vnpy.event.engine import EventEngine
-from vnpy.api.rest import Request, RestClient
-from vnpy.api.websocket import WebsocketClient
 from vnpy.trader.constant import (
     Direction,
     Exchange,
@@ -48,6 +46,9 @@ from vnpy.trader.object import (
     TickData,
     TradeData
 )
+from vnpy_rest import Request, RestClient
+from vnpy_websocket import WebsocketClient
+
 
 # 中国时区
 CHINA_TZ: timezone = timezone("Asia/Shanghai")
@@ -252,7 +253,7 @@ class OkexRestApi(RestClient):
         # 添加请求头
         request.headers = {
             "OK-ACCESS-KEY": self.key,
-            "OK-ACCESS-SIGN": signature,
+            "OK-ACCESS-SIGN": signature.decode(),
             "OK-ACCESS-TIMESTAMP": timestamp,
             "OK-ACCESS-PASSPHRASE": self.passphrase,
             "Content-Type": "application/json"
