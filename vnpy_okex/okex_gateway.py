@@ -537,12 +537,11 @@ class OkexWebsocketPublicApi(WebsocketClient):
             # 提取信息生成合约对象
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKEX2VT[d["instType"]]
+            net_position: bool = True
             if product == Product.SPOT:
                 size: float = 1
-                net_position: bool = True
             else:
                 size: float = float(d["ctMult"])
-                net_position: bool = False
 
             contract: ContractData = ContractData(
                 symbol=symbol,
@@ -561,10 +560,9 @@ class OkexWebsocketPublicApi(WebsocketClient):
             if product == Product.OPTION:
                 contract.option_strike = float(d["stk"])
                 contract.option_type = OPTIONTYPE_OKEXO2VT[d["optType"]]
-                contract.option_expiry = parse_timestamp(d["expTime"])
+                contract.option_expiry = datetime.fromtimestamp(int(d["expTime"]) / 1000)
                 contract.option_portfolio = d["uly"]
                 contract.option_index = d["stk"]
-                contract.net_position = True
                 contract.option_underlying = "_".join([
                     contract.option_portfolio,
                     contract.option_expiry.strftime("%Y%m%d")
