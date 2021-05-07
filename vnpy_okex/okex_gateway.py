@@ -420,8 +420,6 @@ class OkexWebsocketPublicApi(WebsocketClient):
         """构造函数"""
         super().__init__()
 
-        self.ping_interval: int = 20
-
         self.gateway: OkexGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
@@ -540,12 +538,11 @@ class OkexWebsocketPublicApi(WebsocketClient):
             # 提取信息生成合约对象
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKEX2VT[d["instType"]]
+            net_position: bool = True
             if product == Product.SPOT:
                 size: float = 1
-                net_position: bool = True
             else:
                 size: float = float(d["ctMult"])
-                net_position: bool = False
 
             contract: ContractData = ContractData(
                 symbol=symbol,
@@ -564,10 +561,9 @@ class OkexWebsocketPublicApi(WebsocketClient):
             if product == Product.OPTION:
                 contract.option_strike = float(d["stk"])
                 contract.option_type = OPTIONTYPE_OKEXO2VT[d["optType"]]
-                contract.option_expiry = parse_timestamp(d["expTime"])
+                contract.option_expiry = datetime.fromtimestamp(int(d["expTime"]) / 1000)
                 contract.option_portfolio = d["uly"]
                 contract.option_index = d["stk"]
-                contract.net_position = True
                 contract.option_underlying = "_".join([
                     contract.option_portfolio,
                     contract.option_expiry.strftime("%Y%m%d")
@@ -616,8 +612,6 @@ class OkexWebsocketPrivateApi(WebsocketClient):
     def __init__(self, gateway: OkexGateway) -> None:
         """构造函数"""
         super().__init__()
-
-        self.ping_interval: int = 20
 
         self.gateway: OkexGateway = gateway
         self.gateway_name: str = gateway.gateway_name
@@ -743,6 +737,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
     def on_account(self, packet: dict) -> None:
         """资金更新推送"""
+        if len(packet["data"]) == 0:
+            return
         buf: dict = packet["data"][0]
         for detail in buf["details"]:
             account: AccountData = AccountData(
@@ -879,7 +875,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
 
-        # 生成委托亲求
+        # 生成委托请求
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
