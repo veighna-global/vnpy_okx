@@ -705,7 +705,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
     def on_order(self, packet: dict) -> None:
         """委托更新推送"""
-        data = packet["data"]
+        data: list = packet["data"]
         for d in data:
             order: OrderData = parse_order_data(d, self.gateway_name)
             self.gateway.on_order(order)
@@ -776,7 +776,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         # 请求本身格式错误（没有委托的回报数据）
         if packet["code"] != "0":
             if not data:
-                order = self.reqid_order_map[packet["id"]]
+                order: OrderData = self.reqid_order_map[packet["id"]]
                 order.status = Status.REJECTED
                 self.gateway.on_order(order)
                 return
@@ -787,8 +787,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             if code == "0":
                 return
 
-            orderid = d["clOrdId"]
-            order = self.gateway.get_order(orderid)
+            orderid: str = d["clOrdId"]
+            order: OrderData = self.gateway.get_order(orderid)
             if not order:
                 return
             order.status = Status.REJECTED
@@ -838,7 +838,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
     def subscribe_topic(self) -> None:
         """订阅委托、资金和持仓推送"""
-        okex_req = {
+        okex_req: dict = {
             "op": "subscribe",
             "args": [
                 {
@@ -874,7 +874,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
 
-        # 生成委托请求
+        # 生成委托亲求
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
@@ -941,7 +941,7 @@ def parse_timestamp(timestamp: str) -> datetime:
 
 def get_float_value(data: dict, key: str) -> float:
     """获取字典中对应键的浮点数值"""
-    data_str = data.get(key, "")
+    data_str: str = data.get(key, "")
     if not data_str:
         return 0.0
     return float(data_str)
