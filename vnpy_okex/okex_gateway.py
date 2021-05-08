@@ -874,7 +874,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
 
-        # 生成委托亲求
+        # 生成委托请求
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
