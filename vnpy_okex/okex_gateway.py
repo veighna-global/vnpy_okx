@@ -384,7 +384,7 @@ class OkexRestApi(RestClient):
                 for bar_list in data["data"]:
                     ts, o, h, l, c, vol, _ = bar_list
                     dt = parse_timestamp(ts)
-                    bar = BarData(
+                    bar: BarData = BarData(
                         symbol=req.symbol,
                         exchange=req.exchange,
                         datetime=dt,
@@ -956,7 +956,7 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
     else:
         order_id: str = data["ordId"]
 
-    order = OrderData(
+    order: OrderData = OrderData(
         symbol=data["instId"],
         exchange=Exchange.OKEX,
         type=ORDERTYPE_OKEX2VT[data["ordType"]],
