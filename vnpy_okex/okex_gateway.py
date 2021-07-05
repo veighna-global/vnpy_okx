@@ -131,7 +131,7 @@ class OkexGateway(BaseGateway):
         "服务器": ["REAL", "TEST"]
     }
 
-    exchanges = [Exchange.OKEX]
+    exchanges: Exchange = [Exchange.OKEX]
 
     def __init__(self, event_engine: EventEngine, gateway_name: str = "OKEX") -> None:
         """构造函数"""
