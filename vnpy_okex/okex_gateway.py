@@ -14,7 +14,7 @@ import time
 from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 from types import TracebackType
 
 from requests import Response
@@ -121,7 +121,7 @@ class OkexGateway(BaseGateway):
     vn.py用于对接OKEX统一账户的交易接口。
     """
 
-    default_setting = {
+    default_setting: Dict[str, Any] = {
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
