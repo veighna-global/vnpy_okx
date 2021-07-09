@@ -14,7 +14,7 @@ import time
 from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 from types import TracebackType
 
 from requests import Response
@@ -121,7 +121,7 @@ class OkexGateway(BaseGateway):
     vn.py用于对接OKEX统一账户的交易接口。
     """
 
-    default_setting = {
+    default_setting: Dict[str, Any] = {
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
@@ -131,7 +131,7 @@ class OkexGateway(BaseGateway):
         "服务器": ["REAL", "TEST"]
     }
 
-    exchanges = [Exchange.OKEX]
+    exchanges: Exchange = [Exchange.OKEX]
 
     def __init__(self, event_engine: EventEngine, gateway_name: str = "OKEX") -> None:
         """构造函数"""
@@ -370,9 +370,15 @@ class OkexRestApi(RestClient):
 
             # 如果请求失败则终止循环
             if resp.status_code // 100 != 2:
-                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
+                m = "无"
+                data: dict = resp.json()
+                if data["msg"]:
+                    m = data["msg"]
+
+                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{m}"
                 self.gateway.write_log(msg)
                 break
+
             else:
                 data: dict = resp.json()
 
