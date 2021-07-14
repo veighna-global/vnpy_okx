@@ -370,15 +370,9 @@ class OkexRestApi(RestClient):
 
             # 如果请求失败则终止循环
             if resp.status_code // 100 != 2:
-                m = "无"
-                data: dict = resp.json()
-                if data["msg"]:
-                    m = data["msg"]
-
-                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{m}"
+                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
                 self.gateway.write_log(msg)
                 break
-
             else:
                 data: dict = resp.json()
 
