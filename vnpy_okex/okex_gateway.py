@@ -74,6 +74,7 @@ STATUS_OKEX2VT: Dict[str, Status] = {
 
 # 委托类型映射
 ORDERTYPE_OKEX2VT: Dict[str, OrderType] = {
+    "market": OrderType.MARKET,
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
