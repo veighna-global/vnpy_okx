@@ -54,15 +54,15 @@ from vnpy_websocket import WebsocketClient
 CHINA_TZ: timezone = timezone("Asia/Shanghai")
 
 # 实盘和模拟盘REST API地址
-REST_HOST: str = "https://www.okex.com"
+REST_HOST: str = "https://www.okx.com"
 
 # 实盘Websocket API地址
-PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okex.com:8443/ws/v5/public"
-PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okex.com:8443/ws/v5/private"
+PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
+PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
 
 # 模拟盘Websocket API地址
-TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okex.com:8443/ws/v5/public?brokerId=9999"
-TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okex.com:8443/ws/v5/private?brokerId=9999"
+TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
+TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
 
 # 委托状态映射
 STATUS_OKEX2VT: Dict[str, Status] = {
