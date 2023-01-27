@@ -742,7 +742,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
                 balance=float(detail["eq"]),
                 gateway_name=self.gateway_name,
             )
-            account.available = float(detail["availEq"])
+            account.available = float(detail["availEq"]) if len(detail["availEq"]) != 0 else 0.0
             account.frozen = account.balance - account.available
             self.gateway.on_account(account)
 
