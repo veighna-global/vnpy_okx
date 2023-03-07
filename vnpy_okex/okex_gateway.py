@@ -129,7 +129,7 @@ class OkexGateway(BaseGateway):
         "代理端口": "",
         "服务器": ["REAL", "TEST"]
     }
-
+    default_name = "OKEX"
     exchanges: Exchange = [Exchange.OKEX]
 
     def __init__(self, event_engine: EventEngine, gateway_name: str = "OKEX") -> None:
@@ -286,6 +286,8 @@ class OkexRestApi(RestClient):
 
         self.query_time()
         self.query_order()
+        for instType in ["SPOT", "SWAP", "FUTURES"]:
+            self.query_instruments(instType)
 
     def query_order(self) -> None:
         """查询未成交委托"""
@@ -301,6 +303,14 @@ class OkexRestApi(RestClient):
             "GET",
             "/api/v5/public/time",
             callback=self.on_query_time
+        )
+
+    def query_instruments(self, instType) -> None:
+        self.add_request(
+            "GET",
+            "/api/v5/public/instruments",
+            callback=self.on_query_instruments,
+            params={"instType": instType}
         )
 
     def on_query_order(self, packet: dict, request: Request) -> None:
@@ -321,6 +331,49 @@ class OkexRestApi(RestClient):
         local_time: datetime = datetime.now()
         msg: str = f"服务器时间：{server_time}，本机时间：{local_time}"
         self.gateway.write_log(msg)
+
+    def on_query_instruments(self, packet: dict, request: Request) -> None:
+        instType = ""
+        for instrument in packet['data']:
+            symbol: str = instrument["instId"]
+            product: Product = PRODUCT_STR2ENUM[instrument["instType"]]
+            net_position: bool = True
+            instType = product
+            if product == Product.SPOT:
+                size: float = 1
+            else:
+                size: float = float(instrument["ctMult"])
+
+            contract: ContractData = ContractData(
+                symbol=symbol,
+                exchange=Exchange.OKEX,
+                name=symbol,
+                product=product,
+                size=size,
+                pricetick=float(instrument["tickSz"]),
+                min_volume=float(instrument["minSz"]),
+                history_data=True,
+                net_position=net_position,
+                gateway_name=self.gateway_name,
+            )
+
+            # 处理期权相关信息
+            if product == Product.OPTION:
+                contract.option_strike = float(instrument["stk"])
+                contract.option_type = OPTIONTYPE_STR2ENUM[instrument["optType"]]
+                contract.option_expiry = datetime.fromtimestamp(int(instrument["expTime"]) / 1000)
+                contract.option_portfolio = instrument["uly"]
+                contract.option_index = instrument["stk"]
+                contract.option_underlying = "_".join([
+                    contract.option_portfolio,
+                    contract.option_expiry.strftime("%Y%m%d")
+                ])
+
+            # 缓存合约信息并推送
+            symbol_contract_map[contract.symbol] = contract
+            self.gateway.on_contract(contract)
+
+        self.gateway.write_log(f"{instType}合约信息查询成功")
 
     def on_error(
         self,
@@ -378,7 +431,7 @@ class OkexRestApi(RestClient):
                     break
 
                 for bar_list in data["data"]:
-                    ts, o, h, l, c, vol, _ = bar_list
+                    ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm = bar_list
                     dt = parse_timestamp(ts)
                     bar: BarData = BarData(
                         symbol=req.symbol,
