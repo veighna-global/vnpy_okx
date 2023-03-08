@@ -336,7 +336,7 @@ class OkexRestApi(RestClient):
         instType = ""
         for instrument in packet['data']:
             symbol: str = instrument["instId"]
-            product: Product = PRODUCT_STR2ENUM[instrument["instType"]]
+            product: Product = PRODUCT_OKEX2VT[instrument["instType"]]
             net_position: bool = True
             instType = product
             if product == Product.SPOT:
@@ -360,7 +360,7 @@ class OkexRestApi(RestClient):
             # 处理期权相关信息
             if product == Product.OPTION:
                 contract.option_strike = float(instrument["stk"])
-                contract.option_type = OPTIONTYPE_STR2ENUM[instrument["optType"]]
+                contract.option_type = OPTIONTYPE_OKEXO2VT[instrument["optType"]]
                 contract.option_expiry = datetime.fromtimestamp(int(instrument["expTime"]) / 1000)
                 contract.option_portfolio = instrument["uly"]
                 contract.option_index = instrument["stk"]
