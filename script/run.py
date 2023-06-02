@@ -2,7 +2,7 @@ from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.ui import MainWindow, create_qapp
 
-from vnpy_okex import OkexGateway
+from vnpy_okx import OkxGateway
 
 
 def main():
@@ -11,7 +11,7 @@ def main():
 
     event_engine = EventEngine()
     main_engine = MainEngine(event_engine)
-    main_engine.add_gateway(OkexGateway)
+    main_engine.add_gateway(OkxGateway)
 
     main_window = MainWindow(main_engine, event_engine)
     main_window.showMaximized()

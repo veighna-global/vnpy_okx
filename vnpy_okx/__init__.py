@@ -22,7 +22,7 @@
 
 import importlib_metadata
 
-from .okex_gateway import OkexGateway
+from .okx_gateway import OkxGateway
 
 
-__version__ = importlib_metadata.version("vnpy_okex")
+__version__ = importlib_metadata.version("vnpy_okx")
