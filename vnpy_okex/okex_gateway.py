@@ -483,8 +483,7 @@ class OkexWebsocketPublicApi(WebsocketClient):
 
         self.callbacks: Dict[str, callable] = {
             "tickers": self.on_ticker,
-            "books5": self.on_depth,
-            "instruments": self.on_instrument
+            "books5": self.on_depth
         }
 
     def connect(
@@ -500,23 +499,6 @@ class OkexWebsocketPublicApi(WebsocketClient):
             self.init(TEST_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
 
         self.start()
-
-    def query_contract(self) -> None:
-        """查询合约信息"""
-        # 生成现货、永续、期货、期权的查询请求
-        args: list = []
-        for inst_type in ["SPOT", "SWAP", "FUTURES", "OPTION"]:
-            args.append({
-                "channel": "instruments",
-                "instType": inst_type
-            })
-
-        # 发送查询请求
-        okex_req: dict = {
-            "op": "subscribe",
-            "args": args
-        }
-        self.send_packet(okex_req)
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """订阅行情"""
@@ -551,8 +533,6 @@ class OkexWebsocketPublicApi(WebsocketClient):
         """连接成功回报"""
         self.gateway.write_log("Websocket Public API连接成功")
 
-        self.query_contract()
-
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
@@ -586,50 +566,6 @@ class OkexWebsocketPublicApi(WebsocketClient):
         sys.stderr.write(
             self.exception_detail(exception_type, exception_value, tb)
         )
-
-    def on_instrument(self, data: list) -> None:
-        """合约查询回报"""
-        # OKX API更新(https://www.okx.com/docs-v5/log_zh/#2022-12-06),该方法不会被及时调用
-        for d in data:
-            # 提取信息生成合约对象
-            symbol: str = d["instId"]
-            product: Product = PRODUCT_OKEX2VT[d["instType"]]
-            net_position: bool = True
-            if product == Product.SPOT:
-                size: float = 1
-            else:
-                size: float = float(d["ctMult"])
-
-            contract: ContractData = ContractData(
-                symbol=symbol,
-                exchange=Exchange.OKEX,
-                name=symbol,
-                product=product,
-                size=size,
-                pricetick=float(d["tickSz"]),
-                min_volume=float(d["minSz"]),
-                history_data=True,
-                net_position=net_position,
-                gateway_name=self.gateway_name,
-            )
-
-            # 处理期权相关信息
-            if product == Product.OPTION:
-                contract.option_strike = float(d["stk"])
-                contract.option_type = OPTIONTYPE_OKEXO2VT[d["optType"]]
-                contract.option_expiry = datetime.fromtimestamp(int(d["expTime"]) / 1000)
-                contract.option_portfolio = d["uly"]
-                contract.option_index = d["stk"]
-                contract.option_underlying = "_".join([
-                    contract.option_portfolio,
-                    contract.option_expiry.strftime("%Y%m%d")
-                ])
-
-            # 缓存合约信息并推送
-            symbol_contract_map[contract.symbol] = contract
-            self.gateway.on_contract(contract)
-
-        self.gateway.write_log(f"{d['instType']}合约信息查询成功")
 
     def on_ticker(self, data: list) -> None:
         """行情推送回报"""
