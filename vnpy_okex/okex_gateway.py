@@ -28,8 +28,7 @@ from vnpy.trader.constant import (
     Offset,
     OrderType,
     Product,
-    Status,
-    OptionType
+    Status
 )
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.utility import round_to
@@ -98,16 +97,9 @@ INTERVAL_VT2OKEX: Dict[Interval, str] = {
 PRODUCT_OKEX2VT: Dict[str, Product] = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
-    "FUTURES": Product.FUTURES,
-    "OPTION": Product.OPTION
+    "FUTURES": Product.FUTURES
 }
 PRODUCT_VT2OKEX: Dict[Product, str] = {v: k for k, v in PRODUCT_OKEX2VT.items()}
-
-# 期权类型映射
-OPTIONTYPE_OKEXO2VT: Dict[str, OptionType] = {
-    "C": OptionType.CALL,
-    "P": OptionType.PUT
-}
 
 # 合约数据全局缓存字典
 symbol_contract_map: Dict[str, ContractData] = {}
@@ -120,7 +112,7 @@ class OkexGateway(BaseGateway):
     """
     vn.py用于对接OKEX统一账户的交易接口。
     """
-    
+
     default_name = "OKX"
 
     default_setting: Dict[str, Any] = {
@@ -362,18 +354,6 @@ class OkexRestApi(RestClient):
                 net_position=net_position,
                 gateway_name=self.gateway_name,
             )
-
-            # 处理期权相关信息
-            if product == Product.OPTION:
-                contract.option_strike = float(d["stk"])
-                contract.option_type = OPTIONTYPE_OKEXO2VT[d["optType"]]
-                contract.option_expiry = datetime.fromtimestamp(int(d["expTime"]) / 1000)  # noqa
-                contract.option_portfolio = d["uly"]
-                contract.option_index = d["stk"]
-                contract.option_underlying = "_".join([
-                    contract.option_portfolio,
-                    contract.option_expiry.strftime("%Y%m%d")
-                ])
 
             # 缓存合约信息并推送
             symbol_contract_map[contract.symbol] = contract
