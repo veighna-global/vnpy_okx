@@ -1,4 +1,4 @@
-# vn.py框架的OKEX底层接口
+# vn.py框架的OKX底层接口
 
 <p align="center">
   <img src ="https://vnpy.oss-cn-shanghai.aliyuncs.com/vnpy-logo.png"/>
@@ -15,7 +15,7 @@
 
 ## 说明
 
-基于OKEX交易所的V5接口开发，支持统一账户下的现货、期货、永续、期权交易。
+基于OKX交易所的V5接口开发，支持统一账户下的现货、期货、永续、期权交易。
 
 使用时需要注意本接口：
 
@@ -23,7 +23,7 @@
 2. 只支持全仓保证金模式
 3. 只支持单向持仓模式
 
-请在OKEX网站完成账户的相应设置后再使用。
+请在OKX网站完成账户的相应设置后再使用。
 
 ## 安装
 
@@ -32,7 +32,7 @@
 直接使用pip命令：
 
 ```
-pip install vnpy_okex
+pip install vnpy_okx
 ```
 
 下载解压后在cmd中运行
@@ -50,7 +50,7 @@ from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.ui import MainWindow, create_qapp
 
-from vnpy_okex import OkexGateway
+from vnpy_okx import OkxGateway
 
 
 def main():
@@ -59,7 +59,7 @@ def main():
 
     event_engine = EventEngine()
     main_engine = MainEngine(event_engine)
-    main_engine.add_gateway(OkexGateway)
+    main_engine.add_gateway(OkxGateway)
     
     main_window = MainWindow(main_engine, event_engine)
     main_window.showMaximized()

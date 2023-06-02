@@ -64,7 +64,7 @@ TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerI
 TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
 
 # 委托状态映射
-STATUS_OKEX2VT: Dict[str, Status] = {
+STATUS_OKX2VT: Dict[str, Status] = {
     "live": Status.NOTTRADED,
     "partially_filled": Status.PARTTRADED,
     "filled": Status.ALLTRADED,
@@ -72,34 +72,34 @@ STATUS_OKEX2VT: Dict[str, Status] = {
 }
 
 # 委托类型映射
-ORDERTYPE_OKEX2VT: Dict[str, OrderType] = {
+ORDERTYPE_OKX2VT: Dict[str, OrderType] = {
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
 }
-ORDERTYPE_VT2OKEX: Dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKEX2VT.items()}
+ORDERTYPE_VT2OKX: Dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKX2VT.items()}
 
 # 买卖方向映射
-DIRECTION_OKEX2VT: Dict[str, Direction] = {
+DIRECTION_OKX2VT: Dict[str, Direction] = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
 }
-DIRECTION_VT2OKEX: Dict[Direction, str] = {v: k for k, v in DIRECTION_OKEX2VT.items()}
+DIRECTION_VT2OKX: Dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
 
 # 数据频率映射
-INTERVAL_VT2OKEX: Dict[Interval, str] = {
+INTERVAL_VT2OKX: Dict[Interval, str] = {
     Interval.MINUTE: "1m",
     Interval.HOUR: "1H",
     Interval.DAILY: "1D",
 }
 
 # 产品类型映射
-PRODUCT_OKEX2VT: Dict[str, Product] = {
+PRODUCT_OKX2VT: Dict[str, Product] = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
     "FUTURES": Product.FUTURES
 }
-PRODUCT_VT2OKEX: Dict[Product, str] = {v: k for k, v in PRODUCT_OKEX2VT.items()}
+PRODUCT_VT2OKX: Dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
 
 # 合约数据全局缓存字典
 symbol_contract_map: Dict[str, ContractData] = {}
@@ -108,9 +108,9 @@ symbol_contract_map: Dict[str, ContractData] = {}
 local_orderids: Set[str] = set()
 
 
-class OkexGateway(BaseGateway):
+class OkxGateway(BaseGateway):
     """
-    vn.py用于对接OKEX统一账户的交易接口。
+    vn.py用于对接OKX统一账户的交易接口。
     """
 
     default_name = "OKX"
@@ -124,15 +124,15 @@ class OkexGateway(BaseGateway):
         "服务器": ["REAL", "TEST"]
     }
 
-    exchanges: Exchange = [Exchange.OKEX]
+    exchanges: Exchange = [Exchange.OKX]
 
-    def __init__(self, event_engine: EventEngine, gateway_name: str = "OKEX") -> None:
+    def __init__(self, event_engine: EventEngine, gateway_name: str = "OKX") -> None:
         """构造函数"""
         super().__init__(event_engine, gateway_name)
 
-        self.rest_api: "OkexRestApi" = OkexRestApi(self)
-        self.ws_public_api: "OkexWebsocketPublicApi" = OkexWebsocketPublicApi(self)
-        self.ws_private_api: "OkexWebsocketPrivateApi" = OkexWebsocketPrivateApi(self)
+        self.rest_api: "OkxRestApi" = OkxRestApi(self)
+        self.ws_public_api: "OkxWebsocketPublicApi" = OkxWebsocketPublicApi(self)
+        self.ws_private_api: "OkxWebsocketPrivateApi" = OkxWebsocketPrivateApi(self)
 
         self.orders: Dict[str, OrderData] = {}
 
@@ -212,14 +212,14 @@ class OkexGateway(BaseGateway):
         return self.orders.get(orderid, None)
 
 
-class OkexRestApi(RestClient):
+class OkxRestApi(RestClient):
     """"""
 
-    def __init__(self, gateway: OkexGateway) -> None:
+    def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
         super().__init__()
 
-        self.gateway: OkexGateway = gateway
+        self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
         self.key: str = ""
@@ -311,7 +311,7 @@ class OkexRestApi(RestClient):
 
     def query_instrument(self) -> None:
         """查询合约"""
-        for inst_type in PRODUCT_OKEX2VT.keys():
+        for inst_type in PRODUCT_OKX2VT.keys():
             self.add_request(
                 "GET",
                 "/api/v5/public/instruments",
@@ -334,7 +334,7 @@ class OkexRestApi(RestClient):
         for d in data:
             # 提取信息生成合约对象
             symbol: str = d["instId"]
-            product: Product = PRODUCT_OKEX2VT[d["instType"]]
+            product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
 
             if product == Product.SPOT:
@@ -344,7 +344,7 @@ class OkexRestApi(RestClient):
 
             contract: ContractData = ContractData(
                 symbol=symbol,
-                exchange=Exchange.OKEX,
+                exchange=Exchange.OKX,
                 name=symbol,
                 product=product,
                 size=size,
@@ -390,7 +390,7 @@ class OkexRestApi(RestClient):
             # 创建查询参数
             params: dict = {
                 "instId": req.symbol,
-                "bar": INTERVAL_VT2OKEX[req.interval]
+                "bar": INTERVAL_VT2OKX[req.interval]
             }
 
             if end_time:
@@ -448,14 +448,14 @@ class OkexRestApi(RestClient):
         return history
 
 
-class OkexWebsocketPublicApi(WebsocketClient):
+class OkxWebsocketPublicApi(WebsocketClient):
     """"""
 
-    def __init__(self, gateway: OkexGateway) -> None:
+    def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
         super().__init__()
 
-        self.gateway: OkexGateway = gateway
+        self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
         self.subscribed: Dict[str, SubscribeRequest] = {}
@@ -578,14 +578,14 @@ class OkexWebsocketPublicApi(WebsocketClient):
             self.gateway.on_tick(copy(tick))
 
 
-class OkexWebsocketPrivateApi(WebsocketClient):
+class OkxWebsocketPrivateApi(WebsocketClient):
     """"""
 
-    def __init__(self, gateway: OkexGateway) -> None:
+    def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
         super().__init__()
 
-        self.gateway: OkexGateway = gateway
+        self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
         self.key: str = ""
@@ -733,7 +733,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
 
             position: PositionData = PositionData(
                 symbol=symbol,
-                exchange=Exchange.OKEX,
+                exchange=Exchange.OKX,
                 direction=Direction.NET,
                 volume=pos,
                 price=price,
@@ -795,7 +795,7 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         msg: str = timestamp + "GET" + "/users/self/verify"
         signature: bytes = generate_signature(msg, self.secret)
 
-        okex_req: dict = {
+        okx_req: dict = {
             "op": "login",
             "args":
             [
@@ -807,11 +807,11 @@ class OkexWebsocketPrivateApi(WebsocketClient):
                 }
             ]
         }
-        self.send_packet(okex_req)
+        self.send_packet(okx_req)
 
     def subscribe_topic(self) -> None:
         """订阅委托、资金和持仓推送"""
-        okex_req: dict = {
+        okx_req: dict = {
             "op": "subscribe",
             "args": [
                 {
@@ -827,12 +827,12 @@ class OkexWebsocketPrivateApi(WebsocketClient):
                 },
             ]
         }
-        self.send_packet(okex_req)
+        self.send_packet(okx_req)
 
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
         # 检查委托类型是否正确
-        if req.type not in ORDERTYPE_VT2OKEX:
+        if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
             return
 
@@ -851,8 +851,8 @@ class OkexWebsocketPrivateApi(WebsocketClient):
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
-            "side": DIRECTION_VT2OKEX[req.direction],
-            "ordType": ORDERTYPE_VT2OKEX[req.type],
+            "side": DIRECTION_VT2OKX[req.direction],
+            "ordType": ORDERTYPE_VT2OKX[req.type],
             "px": str(req.price),
             "sz": str(req.volume)
         }
@@ -863,12 +863,12 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             args["tdMode"] = "cross"
 
         self.reqid += 1
-        okex_req: dict = {
+        okx_req: dict = {
             "id": str(self.reqid),
             "op": "order",
             "args": [args]
         }
-        self.send_packet(okex_req)
+        self.send_packet(okx_req)
 
         # 推送提交中事件
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
@@ -886,12 +886,12 @@ class OkexWebsocketPrivateApi(WebsocketClient):
             args["ordId"] = req.orderid
 
         self.reqid += 1
-        okex_req: dict = {
+        okx_req: dict = {
             "id": str(self.reqid),
             "op": "cancel-order",
             "args": [args]
         }
-        self.send_packet(okex_req)
+        self.send_packet(okx_req)
 
 
 def generate_signature(msg: str, secret_key: str) -> bytes:
@@ -930,16 +930,16 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
 
     order: OrderData = OrderData(
         symbol=data["instId"],
-        exchange=Exchange.OKEX,
-        type=ORDERTYPE_OKEX2VT[data["ordType"]],
+        exchange=Exchange.OKX,
+        type=ORDERTYPE_OKX2VT[data["ordType"]],
         orderid=order_id,
-        direction=DIRECTION_OKEX2VT[data["side"]],
+        direction=DIRECTION_OKX2VT[data["side"]],
         offset=Offset.NONE,
         traded=float(data["accFillSz"]),
         price=float(data["px"]),
         volume=float(data["sz"]),
         datetime=parse_timestamp(data["cTime"]),
-        status=STATUS_OKEX2VT[data["state"]],
+        status=STATUS_OKX2VT[data["state"]],
         gateway_name=gateway_name,
     )
     return order
