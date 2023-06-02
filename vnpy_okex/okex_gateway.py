@@ -319,25 +319,13 @@ class OkexRestApi(RestClient):
 
     def query_instrument(self) -> None:
         """查询合约"""
-        # 除了OPTION期权的产品
-        for inst_type in ["SPOT", "SWAP", "FUTURES"]:
-            # OKX API中还有instType=MARGIN没有在这里使用
+        for inst_type in PRODUCT_OKEX2VT.keys():
             self.add_request(
                 "GET",
                 "/api/v5/public/instruments",
                 callback=self.on_query_instrument,
                 params={"instType": inst_type}
             )
-        
-        # self.add_request(
-        #     "GET",
-        #     "/api/v5/public/instruments",
-        #     callback=self.on_query_instrument,
-        #     params={
-        #         "instType": "OPTION",
-        #         "uly": ?,
-        #         }
-        # )        
 
     def on_query_time(self, packet: dict, request: Request) -> None:
         """时间查询回报"""
@@ -356,6 +344,7 @@ class OkexRestApi(RestClient):
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKEX2VT[d["instType"]]
             net_position: bool = True
+
             if product == Product.SPOT:
                 size: float = 1
             else:
