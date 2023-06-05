@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Set
 from types import TracebackType
 
 from requests import Response
-from pytz import timezone
 
 from vnpy.event.engine import EventEngine
 from vnpy.trader.constant import (
@@ -31,7 +30,7 @@ from vnpy.trader.constant import (
     Status
 )
 from vnpy.trader.gateway import BaseGateway
-from vnpy.trader.utility import round_to
+from vnpy.trader.utility import round_to, ZoneInfo
 from vnpy.trader.object import (
     AccountData,
     BarData,
@@ -50,7 +49,7 @@ from vnpy_websocket import WebsocketClient
 
 
 # 中国时区
-CHINA_TZ: timezone = timezone("Asia/Shanghai")
+CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 
 # 实盘和模拟盘REST API地址
 REST_HOST: str = "https://www.okx.com"
@@ -909,7 +908,7 @@ def generate_timestamp() -> str:
 def parse_timestamp(timestamp: str) -> datetime:
     """解析回报时间戳"""
     dt: datetime = datetime.fromtimestamp(int(timestamp) / 1000)
-    return CHINA_TZ.localize(dt)
+    return dt.replace(tzinfo=CHINA_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
