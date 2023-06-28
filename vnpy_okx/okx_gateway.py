@@ -377,12 +377,14 @@ class OkxRestApi(RestClient):
 
     def query_history(self, req: HistoryRequest) -> List[BarData]:
         """
-        查询历史数据
+        查询历史数据, API Doc: https://www.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks
 
         K线数据每个粒度最多可获取最近1440条
         """
         buf: Dict[datetime, BarData] = {}
         end_time: str = ""
+        # Minus 1 (ms) is to get data from the bar at start_time, not start_time + interval.
+        start_time: str = str(int(req.start.timestamp() * 1e3 - 1))
         path: str = "/api/v5/market/candles"
 
         for i in range(15):
@@ -392,6 +394,7 @@ class OkxRestApi(RestClient):
                 "bar": INTERVAL_VT2OKX[req.interval]
             }
 
+            params["before"] = start_time
             if end_time:
                 params["after"] = end_time
 
