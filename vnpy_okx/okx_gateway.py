@@ -190,7 +190,6 @@ class OkxGateway(BaseGateway):
 
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
-        print(req)
         # 检查委托类型是否正确
         if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
@@ -203,7 +202,6 @@ class OkxGateway(BaseGateway):
 
     def cancel_order(self, req: CancelRequest) -> None:
         """委托撤单"""
-        print(req)
         order: OrderData = self.get_order(req.orderid)
         if order.type == OrderType.STOP:
             self.rest_api.cancel_stop_order(req)
