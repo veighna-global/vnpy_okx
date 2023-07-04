@@ -362,7 +362,7 @@ class OkxRestApi(RestClient):
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
-            max_leverage = d['lever']
+            max_leverage = 1 if not d["lever"] else float(d["lever"])
 
             if product == Product.SPOT:
                 size: float = 1
