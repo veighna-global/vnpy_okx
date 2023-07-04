@@ -109,6 +109,7 @@ symbol_contract_map: Dict[str, ContractData] = {}
 # 本地委托号缓存集合
 local_orderids: Set[str] = set()
 local_remote_orderid_map: Dict[str, str] = dict()
+support_margin_spot_symbols: Set[str] = set()
 
 
 class OkxGateway(BaseGateway):
@@ -361,9 +362,12 @@ class OkxRestApi(RestClient):
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
+            max_leverage = d['lever']
 
             if product == Product.SPOT:
                 size: float = 1
+                if max_leverage > 1:
+                    support_margin_spot_symbols.add(symbol)
             else:
                 size: float = float(d["ctMult"])
 
@@ -414,7 +418,7 @@ class OkxRestApi(RestClient):
         }
 
         if contract.product == Product.SPOT:
-            data["tdMode"] = "cash"
+            data["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
         else:
             data["tdMode"] = "cross"
 
@@ -996,7 +1000,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         }
 
         if contract.product == Product.SPOT:
-            args["tdMode"] = "cash"
+            args["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
         else:
             args["tdMode"] = "cross"
 
