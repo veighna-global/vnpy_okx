@@ -437,10 +437,9 @@ class OkxRestApi(RestClient):
 
         # 请求本身格式错误（没有委托的回报数据）
         if data["code"] != "0":
-            if not stop_orders:
-                order: OrderData = request.extra
-                order.status = Status.REJECTED
-                self.gateway.on_order(order)
+            order: OrderData = req.extra
+            order.status = Status.REJECTED
+            self.gateway.on_order(order)
 
         for stop_order in stop_orders:
             orderid: str = stop_order["algoClOrdId"]
