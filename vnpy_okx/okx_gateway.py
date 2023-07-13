@@ -367,7 +367,7 @@ class OkxRestApi(RestClient):
                 if max_leverage > 1:
                     support_margin_spot_symbols.add(symbol)
             else:
-                size: float = float(d["ctMult"])
+                size: float = float(d["ctMult"]) * float(d["ctVal"])
 
             contract: ContractData = ContractData(
                 symbol=symbol,
