@@ -228,6 +228,9 @@ class OkxGateway(BaseGateway):
 
     def on_order(self, order: OrderData) -> None:
         """推送委托数据"""
+        if order.orderid in self.orders:
+            order.offset = self.orders[order.orderid].offset
+
         self.orders[order.orderid] = order  # 先做一次缓存
         super().on_order(order)
 
