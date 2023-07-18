@@ -420,6 +420,7 @@ class OkxRestApi(RestClient):
 
         if contract.product == Product.SPOT:
             data["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
+            data["tgtCcy"] = "base_ccy" if req.direction == Direction.LONG else "quote_ccy"
         else:
             data["tdMode"] = "cross"
 
@@ -452,15 +453,15 @@ class OkxRestApi(RestClient):
             if code == "0":
                 return
 
+            msg: str = stop_order["sMsg"]
+            self.gateway.write_log(f"委托失败，状态码：{code}，信息：{msg}")
+
             order: OrderData = self.gateway.get_order(orderid)
             if not order:
                 return
 
             order.status = Status.REJECTED
             self.gateway.on_order(copy(order))
-
-            msg: str = d["sMsg"]
-            self.gateway.write_log(f"委托失败，状态码：{code}，信息：{msg}")
 
     def cancel_stop_order(self, req: CancelRequest):
         """委托撤单"""
