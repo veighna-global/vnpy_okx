@@ -109,6 +109,7 @@ symbol_contract_map: Dict[str, ContractData] = {}
 # 本地委托号缓存集合
 local_orderids: Set[str] = set()
 local_remote_orderid_map: Dict[str, str] = dict()
+remote_local_algo_orderid_map: Dict[str, str] = dict()
 support_margin_spot_symbols: Set[str] = set()
 
 
@@ -447,7 +448,9 @@ class OkxRestApi(RestClient):
 
         for stop_order in stop_orders:
             orderid: str = stop_order["algoClOrdId"]
-            local_remote_orderid_map[orderid] = stop_order["algoId"]
+            remote_orderid = stop_order["algoId"]
+            local_remote_orderid_map[orderid] = remote_orderid
+            remote_local_algo_orderid_map[remote_orderid] = orderid
 
             code: str = stop_order["sCode"]
             if code == "0":
@@ -847,6 +850,9 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """STOP 委托更新推送"""
         data: list = packet["data"]
         for d in data:
+            if d['state'] == "effective":
+                continue
+
             order: OrderData = parse_stop_order_data(d, self.gateway_name)
             if order:
                 self.gateway.on_order(order)
@@ -1065,16 +1071,18 @@ def get_float_value(data: dict, key: str) -> float:
 
 def parse_order_data(data: dict, gateway_name: str) -> OrderData:
     """解析委托回报数据"""
-    local_order_id: str = data["clOrdId"]
-    remote_order_id: str = data["ordId"]
-    if local_order_id:
+    if not data["algoId"]:
+        local_order_id: str = data["clOrdId"]
+        remote_order_id: str = data["ordId"]
         local_orderids.add(local_order_id)
         local_remote_orderid_map[local_order_id] = remote_order_id
-        order_id: str = local_order_id
     else:
-        order_id: str = remote_order_id
+        remote_order_id: str = data["algoId"]
+        local_order_id: str = remote_local_algo_orderid_map[remote_order_id]
 
+    order_id: str = local_order_id
     price = float(data["px"]) if data["px"] else 0
+
     order: OrderData = OrderData(
         symbol=data["instId"],
         exchange=Exchange.OKX,
@@ -1094,18 +1102,20 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
 
 def parse_stop_order_data(data: dict, gateway_name: str) -> OrderData:
     """解析 STOP 委托回报数据"""
+
     local_order_id: str = data["algoClOrdId"]
     remote_order_id: str = data["algoId"]
     if local_order_id:
         local_orderids.add(local_order_id)
         local_remote_orderid_map[local_order_id] = remote_order_id
+        remote_local_algo_orderid_map[remote_order_id] = local_order_id
         order_id: str = local_order_id
     else:
         order_id: str = remote_order_id
 
     def convert_status(status):
         if status == "live":
-            return Status.SUBMITTING
+            return Status.NOTTRADED
         elif status == "canceled":
             return Status.CANCELLED
         else:
@@ -1114,7 +1124,7 @@ def parse_stop_order_data(data: dict, gateway_name: str) -> OrderData:
     if data["ordType"] != "conditional":
         return
 
-    price = float(data["slTriggerPx"])
+    price = float(data["slTriggerPx"] or data["tpTriggerPx"])
     order: OrderData = OrderData(
         symbol=data["instId"],
         exchange=Exchange.OKX,
