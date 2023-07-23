@@ -421,7 +421,8 @@ class OkxRestApi(RestClient):
 
         if contract.product == Product.SPOT:
             data["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
-            data["tgtCcy"] = "base_ccy" if req.direction == Direction.LONG else "quote_ccy"
+            if req.direction == Direction.LONG:
+                data["tgtCcy"] = "base_ccy"
         else:
             data["tdMode"] = "cross"
 
