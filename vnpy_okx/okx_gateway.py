@@ -58,10 +58,12 @@ REST_HOST: str = "https://www.okx.com"
 # 实盘Websocket API地址
 PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
 PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
+BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
 # 模拟盘Websocket API地址
 TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
 TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+TEST_BUSINESS_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
 
 # 委托状态映射
 STATUS_OKX2VT: Dict[str, Status] = {
@@ -138,6 +140,7 @@ class OkxGateway(BaseGateway):
         self.rest_api: "OkxRestApi" = OkxRestApi(self)
         self.ws_public_api: "OkxWebsocketPublicApi" = OkxWebsocketPublicApi(self)
         self.ws_private_api: "OkxWebsocketPrivateApi" = OkxWebsocketPrivateApi(self)
+        self.ws_business_api: "OkxWebsocketBusinessApi" = OkxWebsocketBusinessApi(self)
 
         self.orders: Dict[str, OrderData] = {}
 
@@ -172,6 +175,14 @@ class OkxGateway(BaseGateway):
             server
         )
         self.ws_private_api.connect(
+            key,
+            secret,
+            passphrase,
+            proxy_host,
+            proxy_port,
+            server
+        )
+        self.ws_business_api.connect(
             key,
             secret,
             passphrase,
@@ -226,6 +237,7 @@ class OkxGateway(BaseGateway):
         self.rest_api.stop()
         self.ws_public_api.stop()
         self.ws_private_api.stop()
+        self.ws_business_api.stop()
 
     def on_order(self, order: OrderData) -> None:
         """推送委托数据"""
@@ -738,7 +750,6 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.callbacks: Dict[str, callable] = {
             "login": self.on_login,
             "orders": self.on_order,
-            "orders-algo": self.on_stop_order,
             "account": self.on_account,
             "positions": self.on_position,
             "order": self.on_send_order,
@@ -972,10 +983,6 @@ class OkxWebsocketPrivateApi(WebsocketClient):
                     "instType": "ANY"
                 },
                 {
-                    "channel": "orders-algo",
-                    "instType": "ANY"
-                },
-                {
                     "channel": "account"
                 },
                 {
@@ -1040,6 +1047,144 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             "id": str(self.reqid),
             "op": "cancel-order",
             "args": [args]
+        }
+        self.send_packet(okx_req)
+
+
+class OkxWebsocketBusinessApi(WebsocketClient):
+    """"""
+
+    def __init__(self, gateway: OkxGateway) -> None:
+        """构造函数"""
+        super().__init__()
+
+        self.gateway: OkxGateway = gateway
+        self.gateway_name: str = gateway.gateway_name
+
+        self.key: str = ""
+        self.secret: str = ""
+        self.passphrase: str = ""
+
+        self.reqid: int = 0
+        self.connect_time: int = 0
+
+        self.callbacks: Dict[str, callable] = {
+            "login": self.on_login,
+            "orders-algo": self.on_stop_order,
+            "error": self.on_api_error
+        }
+
+        self.reqid_order_map: Dict[str, OrderData] = {}
+
+    def connect(
+        self,
+        key: str,
+        secret: str,
+        passphrase: str,
+        proxy_host: str,
+        proxy_port: int,
+        server: str
+    ) -> None:
+        """连接Websocket Business 频道"""
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
+
+        if server == "REAL":
+            self.init(BUSINESS_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+        else:
+            self.init(TEST_BUSINESS_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+
+        self.start()
+
+    def on_connected(self) -> None:
+        """连接成功回报"""
+        self.gateway.write_log("Websocket Business API连接成功")
+        self.login()
+
+    def on_disconnected(self) -> None:
+        """连接断开回报"""
+        self.gateway.write_log("Websocket Business API连接断开")
+
+    def on_packet(self, packet: dict) -> None:
+        """推送数据回报"""
+        if "event" in packet:
+            cb_name: str = packet["event"]
+        elif "op" in packet:
+            cb_name: str = packet["op"]
+        else:
+            cb_name: str = packet["arg"]["channel"]
+
+        callback: callable = self.callbacks.get(cb_name, None)
+        if callback:
+            callback(packet)
+
+    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+        """触发异常回报"""
+        msg: str = f"Business 频道触发异常，类型：{exception_type}，信息：{exception_value}"
+        self.gateway.write_log(msg)
+
+        sys.stderr.write(
+            self.exception_detail(exception_type, exception_value, tb)
+        )
+
+    def on_api_error(self, packet: dict) -> None:
+        """用户登录请求回报"""
+        code: str = packet["code"]
+        msg: str = packet["msg"]
+        self.gateway.write_log(f"Websocket Business API请求失败, 状态码：{code}, 信息：{msg}")
+
+    def on_login(self, packet: dict) -> None:
+        """用户登录请求回报"""
+        if packet["code"] == '0':
+            self.gateway.write_log("Websocket Business API登录成功")
+            self.subscribe_topic()
+        else:
+            self.gateway.write_log("Websocket Business API登录失败")
+
+    def on_stop_order(self, packet: dict):
+        """STOP 委托更新推送"""
+        data: list = packet["data"]
+        for d in data:
+            if d['state'] == "effective":
+                continue
+
+            order: OrderData = parse_stop_order_data(d, self.gateway_name)
+            if order:
+                self.gateway.on_order(order)
+
+    def login(self) -> None:
+        """用户登录"""
+        timestamp: str = str(time.time())
+        msg: str = timestamp + "GET" + "/users/self/verify"
+        signature: bytes = generate_signature(msg, self.secret)
+
+        okx_req: dict = {
+            "op": "login",
+            "args":
+            [
+                {
+                    "apiKey": self.key,
+                    "passphrase": self.passphrase,
+                    "timestamp": timestamp,
+                    "sign": signature.decode("utf-8")
+                }
+            ]
+        }
+        self.send_packet(okx_req)
+
+    def subscribe_topic(self) -> None:
+        """订阅委托、资金和持仓推送"""
+        okx_req: dict = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "orders-algo",
+                    "instType": "ANY"
+                }
+            ]
         }
         self.send_packet(okx_req)
 
