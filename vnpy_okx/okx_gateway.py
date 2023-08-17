@@ -15,12 +15,13 @@ from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
 from typing import Any, Dict, List, Set
-from types import TracebackType
+from types import TracebackType, coroutine
 from threading import Lock
 
 from requests import Response
+from asyncio import run_coroutine_threadsafe
 
-from vnpy.event.engine import EventEngine
+from vnpy.event.engine import EventEngine, Event
 from vnpy.trader.constant import (
     Direction,
     Exchange,
@@ -45,6 +46,7 @@ from vnpy.trader.object import (
     TickData,
     TradeData
 )
+from vnpy.trader.event import EVENT_TIMER
 from vnpy_rest import Request, RestClient
 from vnpy_websocket import WebsocketClient
 
@@ -146,6 +148,7 @@ class OkxGateway(BaseGateway):
 
         self.order_count = 0
         self.order_count_lock: Lock = Lock()
+        self.last_ping_timestamp = 0
 
     def connect(self, setting: dict) -> None:
         """连接交易接口"""
@@ -190,6 +193,7 @@ class OkxGateway(BaseGateway):
             proxy_port,
             server
         )
+        self.event_engine.register(EVENT_TIMER, self.process_timer_event)
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """订阅行情"""
@@ -238,6 +242,17 @@ class OkxGateway(BaseGateway):
         self.ws_public_api.stop()
         self.ws_private_api.stop()
         self.ws_business_api.stop()
+
+    def process_timer_event(self, event: Event):
+        current_timestap = datetime.now().timestamp()
+        if current_timestap - self.last_ping_timestamp < 10:
+            return
+
+        self.last_ping_timestamp = current_timestap
+
+        self.ws_public_api.ping()
+        self.ws_private_api.ping()
+        self.ws_business_api.ping()
 
     def on_order(self, order: OrderData) -> None:
         """推送委托数据"""
@@ -600,15 +615,33 @@ class OkxRestApi(RestClient):
         return history
 
 
-class OkxWebsocketPublicApi(WebsocketClient):
+class OkxWebsocketApi(WebsocketClient):
     """"""
 
     def __init__(self, gateway: OkxGateway) -> None:
-        """构造函数"""
         super().__init__()
 
         self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
+
+    def ping(self):
+        if self._ws:
+            coro: coroutine = self._ws.send_str("ping")
+            run_coroutine_threadsafe(coro, self._loop)
+
+    def unpack_data(self, data: str):
+        if data == "pong":
+            return {'op': 'ping'}
+        return super().unpack_data(data)
+
+
+class OkxWebsocketPublicApi(OkxWebsocketApi):
+    """"""
+
+    def __init__(self, gateway: OkxGateway) -> None:
+        """构造函数"""
+        super().__init__(gateway)
+        self._receive_timeout = 90
 
         self.subscribed: Dict[str, SubscribeRequest] = {}
         self.ticks: Dict[str, TickData] = {}
@@ -682,6 +715,12 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 code: str = packet["code"]
                 msg: str = packet["msg"]
                 self.gateway.write_log(f"Websocket Public API请求异常, 状态码：{code}, 信息：{msg}")
+        elif "op" in packet:
+            op: str = packet["op"]
+            callback: callable = self.callbacks.get(op, None)
+            if callback:
+                data = packet["data"]
+                callback(data)
         else:
             channel: str = packet["arg"]["channel"]
             callback: callable = self.callbacks.get(channel, None)
@@ -730,15 +769,13 @@ class OkxWebsocketPublicApi(WebsocketClient):
             self.gateway.on_tick(copy(tick))
 
 
-class OkxWebsocketPrivateApi(WebsocketClient):
+class OkxWebsocketPrivateApi(OkxWebsocketApi):
     """"""
 
     def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
-        super().__init__()
-
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        super().__init__(gateway)
+        self._receive_timeout = 90
 
         self.key: str = ""
         self.secret: str = ""
@@ -1051,15 +1088,13 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.send_packet(okx_req)
 
 
-class OkxWebsocketBusinessApi(WebsocketClient):
+class OkxWebsocketBusinessApi(OkxWebsocketApi):
     """"""
 
     def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
-        super().__init__()
-
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        super().__init__(gateway)
+        self._receive_timeout = 90
 
         self.key: str = ""
         self.secret: str = ""
