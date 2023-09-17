@@ -15,11 +15,13 @@ from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
 from typing import Any, Dict, List, Set
-from types import TracebackType
+from types import TracebackType, coroutine
+from threading import Lock
 
 from requests import Response
+from asyncio import run_coroutine_threadsafe
 
-from vnpy.event.engine import EventEngine
+from vnpy.event.engine import EventEngine, Event
 from vnpy.trader.constant import (
     Direction,
     Exchange,
@@ -44,6 +46,7 @@ from vnpy.trader.object import (
     TickData,
     TradeData
 )
+from vnpy.trader.event import EVENT_TIMER
 from vnpy_rest import Request, RestClient
 from vnpy_websocket import WebsocketClient
 
@@ -57,10 +60,12 @@ REST_HOST: str = "https://www.okx.com"
 # 实盘Websocket API地址
 PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
 PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
+BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
 # 模拟盘Websocket API地址
 TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
 TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+TEST_BUSINESS_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
 
 # 委托状态映射
 STATUS_OKX2VT: Dict[str, Status] = {
@@ -73,6 +78,8 @@ STATUS_OKX2VT: Dict[str, Status] = {
 # 委托类型映射
 ORDERTYPE_OKX2VT: Dict[str, OrderType] = {
     "limit": OrderType.LIMIT,
+    "market": OrderType.MARKET,
+    "stop": OrderType.STOP,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
 }
@@ -105,6 +112,9 @@ symbol_contract_map: Dict[str, ContractData] = {}
 
 # 本地委托号缓存集合
 local_orderids: Set[str] = set()
+local_remote_orderid_map: Dict[str, str] = dict()
+remote_local_algo_orderid_map: Dict[str, str] = dict()
+support_margin_spot_symbols: Set[str] = set()
 
 
 class OkxGateway(BaseGateway):
@@ -132,8 +142,13 @@ class OkxGateway(BaseGateway):
         self.rest_api: "OkxRestApi" = OkxRestApi(self)
         self.ws_public_api: "OkxWebsocketPublicApi" = OkxWebsocketPublicApi(self)
         self.ws_private_api: "OkxWebsocketPrivateApi" = OkxWebsocketPrivateApi(self)
+        self.ws_business_api: "OkxWebsocketBusinessApi" = OkxWebsocketBusinessApi(self)
 
         self.orders: Dict[str, OrderData] = {}
+
+        self.order_count = 0
+        self.order_count_lock: Lock = Lock()
+        self.last_ping_timestamp = 0
 
     def connect(self, setting: dict) -> None:
         """连接交易接口"""
@@ -170,18 +185,44 @@ class OkxGateway(BaseGateway):
             proxy_port,
             server
         )
+        self.ws_business_api.connect(
+            key,
+            secret,
+            passphrase,
+            proxy_host,
+            proxy_port,
+            server
+        )
+        self.event_engine.register(EVENT_TIMER, self.process_timer_event)
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """订阅行情"""
         self.ws_public_api.subscribe(req)
 
+    def _new_order_id(self) -> int:
+        with self.order_count_lock:
+            self.order_count += 1
+            return str(self.order_count).rjust(6, "0")
+
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
-        return self.ws_private_api.send_order(req)
+        # 检查委托类型是否正确
+        if req.type not in ORDERTYPE_VT2OKX:
+            self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
+            return
+
+        if req.type == OrderType.STOP:
+            return self.rest_api.send_stop_order(req)
+        else:
+            return self.ws_private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """委托撤单"""
-        self.ws_private_api.cancel_order(req)
+        order: OrderData = self.get_order(req.orderid)
+        if order.type == OrderType.STOP:
+            self.rest_api.cancel_stop_order(req)
+        else:
+            self.ws_private_api.cancel_order(req)
 
     def query_account(self) -> None:
         """查询资金"""
@@ -200,9 +241,24 @@ class OkxGateway(BaseGateway):
         self.rest_api.stop()
         self.ws_public_api.stop()
         self.ws_private_api.stop()
+        self.ws_business_api.stop()
+
+    def process_timer_event(self, event: Event):
+        current_timestap = datetime.now().timestamp()
+        if current_timestap - self.last_ping_timestamp < 10:
+            return
+
+        self.last_ping_timestamp = current_timestap
+
+        self.ws_public_api.ping()
+        self.ws_private_api.ping()
+        self.ws_business_api.ping()
 
     def on_order(self, order: OrderData) -> None:
         """推送委托数据"""
+        if order.orderid in self.orders:
+            order.offset = self.orders[order.orderid].offset
+
         self.orders[order.orderid] = order  # 先做一次缓存
         super().on_order(order)
 
@@ -335,11 +391,14 @@ class OkxRestApi(RestClient):
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
+            max_leverage = 1 if not d["lever"] else float(d["lever"])
 
             if product == Product.SPOT:
                 size: float = 1
+                if max_leverage > 1:
+                    support_margin_spot_symbols.add(symbol)
             else:
-                size: float = float(d["ctMult"])
+                size: float = float(d["ctMult"]) * float(d["ctVal"])
 
             contract: ContractData = ContractData(
                 symbol=symbol,
@@ -351,6 +410,7 @@ class OkxRestApi(RestClient):
                 min_volume=float(d["minSz"]),
                 history_data=True,
                 net_position=net_position,
+                stop_supported=True,
                 gateway_name=self.gateway_name,
             )
 
@@ -359,6 +419,110 @@ class OkxRestApi(RestClient):
             self.gateway.on_contract(contract)
 
         self.gateway.write_log(f"{d['instType']}合约信息查询成功")
+
+    def send_stop_order(self, req: OrderRequest):
+        # 检查合约代码是否正确
+        contract: ContractData = symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.gateway.write_log(f"委托失败，找不到该合约代码{req.symbol}")
+            return
+
+        # 生成本地委托号
+        orderid = f"{self.connect_time}{self.gateway._new_order_id()}"
+
+        order: OrderData = req.create_order_data(
+            orderid,
+            self.gateway_name
+        )
+
+        # 生成委托请求
+        data: dict = {
+            "instId": req.symbol,
+            "algoClOrdId": orderid,
+            "side": DIRECTION_VT2OKX[req.direction],
+            "ordType": "conditional",
+            "slTriggerPx": str(req.price),
+            "slOrdPx": "-1",
+            "sz": str(req.volume)
+        }
+
+        if contract.product == Product.SPOT:
+            data["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
+            if req.direction == Direction.LONG:
+                data["tgtCcy"] = "base_ccy"
+        else:
+            data["tdMode"] = "cross"
+
+        self.add_request(
+            "POST",
+            "/api/v5/trade/order-algo",
+            callback=self.on_send_stop_order,
+            data=data,
+            extra=order,
+        )
+
+        self.gateway.on_order(order)
+        return order.vt_orderid
+
+    def on_send_stop_order(self, data: dict, req: OrderRequest) -> None:
+        """委托下单回报"""
+        stop_orders: list = data["data"]
+
+        # 请求本身格式错误（没有委托的回报数据）
+        if data["code"] != "0":
+            order: OrderData = req.extra
+            order.status = Status.REJECTED
+            self.gateway.on_order(order)
+
+        for stop_order in stop_orders:
+            orderid: str = stop_order["algoClOrdId"]
+            remote_orderid = stop_order["algoId"]
+            local_remote_orderid_map[orderid] = remote_orderid
+            remote_local_algo_orderid_map[remote_orderid] = orderid
+
+            code: str = stop_order["sCode"]
+            if code == "0":
+                return
+
+            msg: str = stop_order["sMsg"]
+            self.gateway.write_log(f"委托失败，状态码：{code}，信息：{msg}")
+
+            order: OrderData = self.gateway.get_order(orderid)
+            if not order:
+                return
+
+            order.status = Status.REJECTED
+            self.gateway.on_order(copy(order))
+
+    def cancel_stop_order(self, req: CancelRequest):
+        """委托撤单"""
+        # STOP 订单只支持 algoId 撤销
+        if req.orderid not in local_remote_orderid_map:
+            return
+
+        remote_order_id = local_remote_orderid_map[req.orderid]
+        data: List[dict] = [{
+            "instId": req.symbol,
+            "algoId": remote_order_id
+        }]
+        self.add_request(
+            "POST",
+            "/api/v5/trade/cancel-algos",
+            callback=self.on_cancel_stop_order,
+            data=data
+        )
+
+    def on_cancel_stop_order(self, data: dict, req: CancelRequest):
+        if data["code"] != 0:
+            return
+
+        data: List = data['data']
+        for d in data:
+            if d['sCode'] == 0:
+                return
+
+            msg: str = d["sMsg"]
+            self.gateway.write_log(f"撤单失败，状态码：{code}，信息：{msg}")
 
     def on_error(
         self,
@@ -377,21 +541,25 @@ class OkxRestApi(RestClient):
 
     def query_history(self, req: HistoryRequest) -> List[BarData]:
         """
-        查询历史数据
+        查询历史数据, API Doc: https://www.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks
 
         K线数据每个粒度最多可获取最近1440条
         """
         buf: Dict[datetime, BarData] = {}
         end_time: str = ""
+        # Minus 1 (ms) is to get data from the bar at start_time, not start_time + interval.
+        start_time: str = str(int(req.start.timestamp() * 1e3 - 1))
         path: str = "/api/v5/market/candles"
 
         for i in range(15):
             # 创建查询参数
             params: dict = {
                 "instId": req.symbol,
-                "bar": INTERVAL_VT2OKX[req.interval]
+                "bar": INTERVAL_VT2OKX[req.interval],
+                "limit": 300
             }
 
+            params["before"] = start_time
             if end_time:
                 params["after"] = end_time
 
@@ -416,7 +584,7 @@ class OkxRestApi(RestClient):
                     break
 
                 for bar_list in data["data"]:
-                    ts, o, h, l, c, vol, _ = bar_list
+                    ts, o, h, l, c, vol, *_ = bar_list
                     dt = parse_timestamp(ts)
                     bar: BarData = BarData(
                         symbol=req.symbol,
@@ -447,15 +615,33 @@ class OkxRestApi(RestClient):
         return history
 
 
-class OkxWebsocketPublicApi(WebsocketClient):
+class OkxWebsocketApi(WebsocketClient):
     """"""
 
     def __init__(self, gateway: OkxGateway) -> None:
-        """构造函数"""
         super().__init__()
 
         self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
+
+    def ping(self):
+        if self._ws:
+            coro: coroutine = self._ws.send_str("ping")
+            run_coroutine_threadsafe(coro, self._loop)
+
+    def unpack_data(self, data: str):
+        if data == "pong":
+            return {'op': 'ping'}
+        return super().unpack_data(data)
+
+
+class OkxWebsocketPublicApi(OkxWebsocketApi):
+    """"""
+
+    def __init__(self, gateway: OkxGateway) -> None:
+        """构造函数"""
+        super().__init__(gateway)
+        self._receive_timeout = 90
 
         self.subscribed: Dict[str, SubscribeRequest] = {}
         self.ticks: Dict[str, TickData] = {}
@@ -529,6 +715,12 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 code: str = packet["code"]
                 msg: str = packet["msg"]
                 self.gateway.write_log(f"Websocket Public API请求异常, 状态码：{code}, 信息：{msg}")
+        elif "op" in packet:
+            op: str = packet["op"]
+            callback: callable = self.callbacks.get(op, None)
+            if callback:
+                data = packet["data"]
+                callback(data)
         else:
             channel: str = packet["arg"]["channel"]
             callback: callable = self.callbacks.get(channel, None)
@@ -577,22 +769,19 @@ class OkxWebsocketPublicApi(WebsocketClient):
             self.gateway.on_tick(copy(tick))
 
 
-class OkxWebsocketPrivateApi(WebsocketClient):
+class OkxWebsocketPrivateApi(OkxWebsocketApi):
     """"""
 
     def __init__(self, gateway: OkxGateway) -> None:
         """构造函数"""
-        super().__init__()
-
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        super().__init__(gateway)
+        self._receive_timeout = 90
 
         self.key: str = ""
         self.secret: str = ""
         self.passphrase: str = ""
 
         self.reqid: int = 0
-        self.order_count: int = 0
         self.connect_time: int = 0
 
         self.callbacks: Dict[str, callable] = {
@@ -706,6 +895,17 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             )
             self.gateway.on_trade(trade)
 
+    def on_stop_order(self, packet: dict):
+        """STOP 委托更新推送"""
+        data: list = packet["data"]
+        for d in data:
+            if d['state'] == "effective":
+                continue
+
+            order: OrderData = parse_stop_order_data(d, self.gateway_name)
+            if order:
+                self.gateway.on_order(order)
+
     def on_account(self, packet: dict) -> None:
         """资金更新推送"""
         if len(packet["data"]) == 0:
@@ -755,11 +955,13 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
         # 业务逻辑处理失败
         for d in data:
+            orderid: str = d["clOrdId"]
+            local_remote_orderid_map[orderid] = d["ordId"]
+
             code: str = d["sCode"]
             if code == "0":
                 return
 
-            orderid: str = d["clOrdId"]
             order: OrderData = self.gateway.get_order(orderid)
             if not order:
                 return
@@ -830,11 +1032,6 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
-        # 检查委托类型是否正确
-        if req.type not in ORDERTYPE_VT2OKX:
-            self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
-            return
-
         # 检查合约代码是否正确
         contract: ContractData = symbol_contract_map.get(req.symbol, None)
         if not contract:
@@ -842,9 +1039,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             return
 
         # 生成本地委托号
-        self.order_count += 1
-        count_str = str(self.order_count).rjust(6, "0")
-        orderid = f"{self.connect_time}{count_str}"
+        orderid = f"{self.connect_time}{self.gateway._new_order_id()}"
 
         # 生成委托请求
         args: dict = {
@@ -857,7 +1052,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         }
 
         if contract.product == Product.SPOT:
-            args["tdMode"] = "cash"
+            args["tdMode"] = "cash" if contract.symbol not in support_margin_spot_symbols else "cross"
         else:
             args["tdMode"] = "cross"
 
@@ -893,6 +1088,142 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.send_packet(okx_req)
 
 
+class OkxWebsocketBusinessApi(OkxWebsocketApi):
+    """"""
+
+    def __init__(self, gateway: OkxGateway) -> None:
+        """构造函数"""
+        super().__init__(gateway)
+        self._receive_timeout = 90
+
+        self.key: str = ""
+        self.secret: str = ""
+        self.passphrase: str = ""
+
+        self.reqid: int = 0
+        self.connect_time: int = 0
+
+        self.callbacks: Dict[str, callable] = {
+            "login": self.on_login,
+            "orders-algo": self.on_stop_order,
+            "error": self.on_api_error
+        }
+
+        self.reqid_order_map: Dict[str, OrderData] = {}
+
+    def connect(
+        self,
+        key: str,
+        secret: str,
+        passphrase: str,
+        proxy_host: str,
+        proxy_port: int,
+        server: str
+    ) -> None:
+        """连接Websocket Business 频道"""
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
+
+        if server == "REAL":
+            self.init(BUSINESS_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+        else:
+            self.init(TEST_BUSINESS_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+
+        self.start()
+
+    def on_connected(self) -> None:
+        """连接成功回报"""
+        self.gateway.write_log("Websocket Business API连接成功")
+        self.login()
+
+    def on_disconnected(self) -> None:
+        """连接断开回报"""
+        self.gateway.write_log("Websocket Business API连接断开")
+
+    def on_packet(self, packet: dict) -> None:
+        """推送数据回报"""
+        if "event" in packet:
+            cb_name: str = packet["event"]
+        elif "op" in packet:
+            cb_name: str = packet["op"]
+        else:
+            cb_name: str = packet["arg"]["channel"]
+
+        callback: callable = self.callbacks.get(cb_name, None)
+        if callback:
+            callback(packet)
+
+    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+        """触发异常回报"""
+        msg: str = f"Business 频道触发异常，类型：{exception_type}，信息：{exception_value}"
+        self.gateway.write_log(msg)
+
+        sys.stderr.write(
+            self.exception_detail(exception_type, exception_value, tb)
+        )
+
+    def on_api_error(self, packet: dict) -> None:
+        """用户登录请求回报"""
+        code: str = packet["code"]
+        msg: str = packet["msg"]
+        self.gateway.write_log(f"Websocket Business API请求失败, 状态码：{code}, 信息：{msg}")
+
+    def on_login(self, packet: dict) -> None:
+        """用户登录请求回报"""
+        if packet["code"] == '0':
+            self.gateway.write_log("Websocket Business API登录成功")
+            self.subscribe_topic()
+        else:
+            self.gateway.write_log("Websocket Business API登录失败")
+
+    def on_stop_order(self, packet: dict):
+        """STOP 委托更新推送"""
+        data: list = packet["data"]
+        for d in data:
+            if d['state'] == "effective":
+                continue
+
+            order: OrderData = parse_stop_order_data(d, self.gateway_name)
+            if order:
+                self.gateway.on_order(order)
+
+    def login(self) -> None:
+        """用户登录"""
+        timestamp: str = str(time.time())
+        msg: str = timestamp + "GET" + "/users/self/verify"
+        signature: bytes = generate_signature(msg, self.secret)
+
+        okx_req: dict = {
+            "op": "login",
+            "args":
+            [
+                {
+                    "apiKey": self.key,
+                    "passphrase": self.passphrase,
+                    "timestamp": timestamp,
+                    "sign": signature.decode("utf-8")
+                }
+            ]
+        }
+        self.send_packet(okx_req)
+
+    def subscribe_topic(self) -> None:
+        """订阅委托、资金和持仓推送"""
+        okx_req: dict = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "orders-algo",
+                    "instType": "ANY"
+                }
+            ]
+        }
+        self.send_packet(okx_req)
+
+
 def generate_signature(msg: str, secret_key: str) -> bytes:
     """生成签名"""
     return base64.b64encode(hmac.new(secret_key, msg.encode(), hashlib.sha256).digest())
@@ -921,11 +1252,17 @@ def get_float_value(data: dict, key: str) -> float:
 
 def parse_order_data(data: dict, gateway_name: str) -> OrderData:
     """解析委托回报数据"""
-    order_id: str = data["clOrdId"]
-    if order_id:
-        local_orderids.add(order_id)
+    if not data["algoId"]:
+        local_order_id: str = data["clOrdId"]
+        remote_order_id: str = data["ordId"]
+        local_orderids.add(local_order_id)
+        local_remote_orderid_map[local_order_id] = remote_order_id
     else:
-        order_id: str = data["ordId"]
+        remote_order_id: str = data["algoId"]
+        local_order_id: str = remote_local_algo_orderid_map[remote_order_id]
+
+    order_id: str = local_order_id
+    price = float(data["px"]) if data["px"] else 0
 
     order: OrderData = OrderData(
         symbol=data["instId"],
@@ -935,10 +1272,52 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
         direction=DIRECTION_OKX2VT[data["side"]],
         offset=Offset.NONE,
         traded=float(data["accFillSz"]),
-        price=float(data["px"]),
+        price=price,
         volume=float(data["sz"]),
         datetime=parse_timestamp(data["cTime"]),
         status=STATUS_OKX2VT[data["state"]],
         gateway_name=gateway_name,
     )
+
+    return order
+
+def parse_stop_order_data(data: dict, gateway_name: str) -> OrderData:
+    """解析 STOP 委托回报数据"""
+
+    local_order_id: str = data["algoClOrdId"]
+    remote_order_id: str = data["algoId"]
+    if local_order_id:
+        local_orderids.add(local_order_id)
+        local_remote_orderid_map[local_order_id] = remote_order_id
+        remote_local_algo_orderid_map[remote_order_id] = local_order_id
+        order_id: str = local_order_id
+    else:
+        order_id: str = remote_order_id
+
+    def convert_status(status):
+        if status == "live":
+            return Status.NOTTRADED
+        elif status == "canceled":
+            return Status.CANCELLED
+        else:
+            return Status.REJECTED
+
+    if data["ordType"] != "conditional":
+        return
+
+    price = float(data["slTriggerPx"] or data["tpTriggerPx"])
+    order: OrderData = OrderData(
+        symbol=data["instId"],
+        exchange=Exchange.OKX,
+        type=OrderType.STOP,
+        orderid=order_id,
+        direction=DIRECTION_OKX2VT[data["side"]],
+        offset=Offset.NONE,
+        price=price,
+        volume=float(data["sz"]),
+        datetime=parse_timestamp(data["cTime"]),
+        status=convert_status(data["state"]),
+        gateway_name=gateway_name,
+    )
+
     return order
