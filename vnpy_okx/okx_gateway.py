@@ -43,26 +43,34 @@ from vnpy_websocket import WebsocketClient
 # 中国时区
 UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
-# 实盘和模拟盘REST API地址
+# Real server hosts
 REST_HOST: str = "https://www.okx.com"
-
-# 实盘Websocket API地址
 PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
 PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
+BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
-# 模拟盘Websocket API地址
-TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
-TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+# AWS server hosts
+AWS_REST_HOST: str = "https://aws.okx.com"
+AWS_PUBLIC_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/public"
+AWS_PRIVATE_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/private"
+AWS_BUSINESS_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/business"
 
-# 委托状态映射
+# Demo server hosts
+DEMO_REST_HOST: str = "https://www.okx.com"
+DEMO_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
+DEMO_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+DEMO_BUSINESS_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
+
+# Order status map
 STATUS_OKX2VT: dict[str, Status] = {
     "live": Status.NOTTRADED,
     "partially_filled": Status.PARTTRADED,
     "filled": Status.ALLTRADED,
-    "canceled": Status.CANCELLED
+    "canceled": Status.CANCELLED,
+    "mmp_canceled": Status.CANCELLED
 }
 
-# 委托类型映射
+# Order type map
 ORDERTYPE_OKX2VT: dict[str, OrderType] = {
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
@@ -70,21 +78,21 @@ ORDERTYPE_OKX2VT: dict[str, OrderType] = {
 }
 ORDERTYPE_VT2OKX: dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKX2VT.items()}
 
-# 买卖方向映射
+# Direction map
 DIRECTION_OKX2VT: dict[str, Direction] = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
 }
 DIRECTION_VT2OKX: dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
 
-# 数据频率映射
+# Kline interval map
 INTERVAL_VT2OKX: dict[Interval, str] = {
     Interval.MINUTE: "1m",
     Interval.HOUR: "1H",
     Interval.DAILY: "1D",
 }
 
-# 产品类型映射
+# Product type map
 PRODUCT_OKX2VT: dict[str, Product] = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
@@ -92,10 +100,10 @@ PRODUCT_OKX2VT: dict[str, Product] = {
 }
 PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
 
-# 合约数据全局缓存字典
+# Global dict for contract data
 symbol_contract_map: dict[str, ContractData] = {}
 
-# 本地委托号缓存集合
+# Global set for local order id
 local_orderids: set[str] = set()
 
 
