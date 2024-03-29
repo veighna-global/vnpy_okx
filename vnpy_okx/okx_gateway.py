@@ -109,7 +109,9 @@ local_orderids: set[str] = set()
 
 class OkxGateway(BaseGateway):
     """
-    vn.py用于对接OKX统一账户的交易接口。
+    The OKX trading gateway for VeighNa.
+
+    Only support net mode
     """
 
     default_name = "OKX"
@@ -118,15 +120,20 @@ class OkxGateway(BaseGateway):
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
-        "代理地址": "",
-        "代理端口": "",
-        "服务器": ["REAL", "TEST"]
+        "服务器": ["REAL", "AWS", "DEMO"],
+        "Proxy Host": "",
+        "Proxy Port": "",
     }
 
     exchanges: Exchange = [Exchange.OKX]
 
-    def __init__(self, event_engine: EventEngine, gateway_name: str = "OKX") -> None:
-        """构造函数"""
+    def __init__(self, event_engine: EventEngine, gateway_name: str) -> None:
+        """
+        The init method of the gateway.
+
+        event_engine: the global event engine object of VeighNa
+        gateway_name: the unique name for identifying the gateway
+        """
         super().__init__(event_engine, gateway_name)
 
         self.rest_api: "OkxRestApi" = OkxRestApi(self)
@@ -136,12 +143,12 @@ class OkxGateway(BaseGateway):
         self.orders: dict[str, OrderData] = {}
 
     def connect(self, setting: dict) -> None:
-        """连接交易接口"""
+        """Start server connections"""
         key: str = setting["API Key"]
         secret: str = setting["Secret Key"]
         passphrase: str = setting["Passphrase"]
-        proxy_host: str = setting["代理地址"]
-        proxy_port: str = setting["代理端口"]
+        proxy_host: str = setting["Proxy Host"]
+        proxy_port: str = setting["Proxy Port"]
         server: str = setting["服务器"]
 
         if proxy_port.isdigit():
@@ -172,50 +179,54 @@ class OkxGateway(BaseGateway):
         )
 
     def subscribe(self, req: SubscribeRequest) -> None:
-        """订阅行情"""
+        """Subscribe market data"""
         self.ws_public_api.subscribe(req)
 
     def send_order(self, req: OrderRequest) -> str:
-        """委托下单"""
+        """Send new order"""
         return self.ws_private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
-        """委托撤单"""
+        """Cancel existing order"""
         self.ws_private_api.cancel_order(req)
 
     def query_account(self) -> None:
-        """查询资金"""
+        """Not required since OKX provides websocket update"""
         pass
 
     def query_position(self) -> None:
-        """查询持仓"""
+        """Not required since OKX provides websocket update"""
         pass
 
     def query_history(self, req: HistoryRequest) -> list[BarData]:
-        """查询历史数据"""
+        """Query kline history data"""
         return self.rest_api.query_history(req)
 
     def close(self) -> None:
-        """关闭连接"""
+        """Close server connections"""
         self.rest_api.stop()
         self.ws_public_api.stop()
         self.ws_private_api.stop()
 
     def on_order(self, order: OrderData) -> None:
-        """推送委托数据"""
+        """Save a copy of order and then pus"""
         self.orders[order.orderid] = order  # 先做一次缓存
         super().on_order(order)
 
     def get_order(self, orderid: str) -> OrderData:
-        """查询委托数据"""
+        """Get previously saved order"""
         return self.orders.get(orderid, None)
 
 
 class OkxRestApi(RestClient):
-    """"""
+    """The REST API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
-        """构造函数"""
+        """
+        The init method of the api.
+
+        gateway: the parent gateway object for pushing callback data.
+        """
         super().__init__()
 
         self.gateway: OkxGateway = gateway
@@ -227,7 +238,7 @@ class OkxRestApi(RestClient):
         self.simulated: bool = False
 
     def sign(self, request: Request) -> Request:
-        """生成欧易V5签名"""
+        """Standard callback for signing a request"""
         # 签名
         timestamp: str = generate_timestamp()
         request.data = json.dumps(request.data)
@@ -263,7 +274,7 @@ class OkxRestApi(RestClient):
         proxy_port: int,
         server: str
     ) -> None:
-        """连接REST服务器"""
+        """Start server connection"""
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -279,26 +290,44 @@ class OkxRestApi(RestClient):
 
         self.query_time()
         self.query_order()
-        self.query_instrument()
-
-    def query_order(self) -> None:
-        """查询未成交委托"""
-        self.add_request(
-            "GET",
-            "/api/v5/trade/orders-pending",
-            callback=self.on_query_order,
-        )
+        self.query_contract()
 
     def query_time(self) -> None:
-        """查询时间"""
+        """Query server time"""
         self.add_request(
             "GET",
             "/api/v5/public/time",
             callback=self.on_query_time
         )
 
+    def query_order(self) -> None:
+        """Query open orders"""
+        self.add_request(
+            "GET",
+            "/api/v5/trade/orders-pending",
+            callback=self.on_query_order,
+        )
+
+    def query_contract(self) -> None:
+        """Query available contract"""
+        for inst_type in PRODUCT_OKX2VT.keys():
+            self.add_request(
+                "GET",
+                "/api/v5/public/instruments",
+                callback=self.on_query_contract,
+                params={"instType": inst_type}
+            )
+
+    def on_query_time(self, packet: dict, request: Request) -> None:
+        """Callback of server time query"""
+        timestamp: int = int(packet["data"][0]["ts"])
+        server_time: datetime = datetime.fromtimestamp(timestamp / 1000)
+        local_time: datetime = datetime.now()
+        msg: str = f"服务器时间：{server_time}，本机时间：{local_time}"
+        self.gateway.write_log(msg)
+
     def on_query_order(self, packet: dict, request: Request) -> None:
-        """未成交委托查询回报"""
+        """Callback of open orders query"""
         for order_info in packet["data"]:
             order: OrderData = parse_order_data(
                 order_info,
@@ -308,26 +337,8 @@ class OkxRestApi(RestClient):
 
         self.gateway.write_log("委托信息查询成功")
 
-    def query_instrument(self) -> None:
-        """查询合约"""
-        for inst_type in PRODUCT_OKX2VT.keys():
-            self.add_request(
-                "GET",
-                "/api/v5/public/instruments",
-                callback=self.on_query_instrument,
-                params={"instType": inst_type}
-            )
-
-    def on_query_time(self, packet: dict, request: Request) -> None:
-        """时间查询回报"""
-        timestamp: int = int(packet["data"][0]["ts"])
-        server_time: datetime = datetime.fromtimestamp(timestamp / 1000)
-        local_time: datetime = datetime.now()
-        msg: str = f"服务器时间：{server_time}，本机时间：{local_time}"
-        self.gateway.write_log(msg)
-
-    def on_query_instrument(self, packet: dict, request: Request) -> None:
-        """合约查询回报"""
+    def on_query_contract(self, packet: dict, request: Request) -> None:
+        """Callback of available contracts query"""
         data: list = packet["data"]
 
         for d in data:
@@ -367,20 +378,16 @@ class OkxRestApi(RestClient):
         tb: TracebackType,
         request: Request
     ) -> None:
-        """触发异常回报"""
-        msg: str = f"触发异常，状态码：{exception_type}，信息：{exception_value}"
+        """General error callback"""
+        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+
+        msg: str = f"REST触发异常: {detail}"
         self.gateway.write_log(msg)
 
-        sys.stderr.write(
-            self.exception_detail(exception_type, exception_value, tb, request)
-        )
+        print(detail)
 
     def query_history(self, req: HistoryRequest) -> list[BarData]:
-        """
-        查询历史数据
-
-        K线数据每个粒度最多可获取最近1440条
-        """
+        """Query kline history data"""
         buf: dict[datetime, BarData] = {}
         end_time: str = ""
         path: str = "/api/v5/market/candles"
@@ -448,10 +455,14 @@ class OkxRestApi(RestClient):
 
 
 class OkxWebsocketPublicApi(WebsocketClient):
-    """"""
+    """The public websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
-        """构造函数"""
+        """
+        The init method of the api.
+
+        gateway: the parent gateway object for pushing callback data.
+        """
         super().__init__()
 
         self.gateway: OkxGateway = gateway
@@ -471,7 +482,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         proxy_port: int,
         server: str
     ) -> None:
-        """连接Websocket公共频道"""
+        """Start server connection"""
         if server == "REAL":
             self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
         else:
@@ -480,7 +491,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         self.start()
 
     def subscribe(self, req: SubscribeRequest) -> None:
-        """订阅行情"""
+        """Subscribe market data"""
         # 缓存订阅记录
         self.subscribed[req.vt_symbol] = req
 
@@ -509,18 +520,18 @@ class OkxWebsocketPublicApi(WebsocketClient):
         self.send_packet(req)
 
     def on_connected(self) -> None:
-        """连接成功回报"""
+        """Callback when server is connected"""
         self.gateway.write_log("Websocket Public API连接成功")
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
     def on_disconnected(self) -> None:
-        """连接断开回报"""
+        """Callback when server is disconnected"""
         self.gateway.write_log("Websocket Public API连接断开")
 
     def on_packet(self, packet: dict) -> None:
-        """推送数据回报"""
+        """Callback of data update"""
         if "event" in packet:
             event: str = packet["event"]
             if event == "subscribe":
@@ -538,16 +549,16 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 callback(data)
 
     def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
-        """触发异常回报"""
-        msg: str = f"公共频道触发异常，类型：{exception_type}，信息：{exception_value}"
+        """General error callback"""
+        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+
+        msg: str = f"公共频道触发异常: {detail}"
         self.gateway.write_log(msg)
 
-        sys.stderr.write(
-            self.exception_detail(exception_type, exception_value, tb)
-        )
+        print(detail)
 
     def on_ticker(self, data: list) -> None:
-        """行情推送回报"""
+        """Callback of ticker update"""
         for d in data:
             tick: TickData = self.ticks[d["instId"]]
             tick.last_price = float(d["last"])
@@ -557,7 +568,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
             tick.volume = float(d["vol24h"])
 
     def on_depth(self, data: list) -> None:
-        """盘口推送回报"""
+        """Callback of depth update"""
         for d in data:
             tick: TickData = self.ticks[d["instId"]]
             bids: list = d["bids"]
@@ -578,10 +589,14 @@ class OkxWebsocketPublicApi(WebsocketClient):
 
 
 class OkxWebsocketPrivateApi(WebsocketClient):
-    """"""
+    """The private websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
-        """构造函数"""
+        """
+        The init method of the api.
+
+        gateway: the parent gateway object for pushing callback data.
+        """
         super().__init__()
 
         self.gateway: OkxGateway = gateway
@@ -616,7 +631,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         proxy_port: int,
         server: str
     ) -> None:
-        """连接Websocket私有频道"""
+        """Start server connection"""
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
@@ -631,16 +646,16 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.start()
 
     def on_connected(self) -> None:
-        """连接成功回报"""
+        """Callback when server is connected"""
         self.gateway.write_log("Websocket Private API连接成功")
         self.login()
 
     def on_disconnected(self) -> None:
-        """连接断开回报"""
+        """Callback when server is disconnected"""
         self.gateway.write_log("Websocket Private API连接断开")
 
     def on_packet(self, packet: dict) -> None:
-        """推送数据回报"""
+        """Callback of data update"""
         if "event" in packet:
             cb_name: str = packet["event"]
         elif "op" in packet:
@@ -653,22 +668,22 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             callback(packet)
 
     def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
-        """触发异常回报"""
-        msg: str = f"私有频道触发异常，类型：{exception_type}，信息：{exception_value}"
+        """General error callback"""
+        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+
+        msg: str = f"私有频道触发异常: {detail}"
         self.gateway.write_log(msg)
 
-        sys.stderr.write(
-            self.exception_detail(exception_type, exception_value, tb)
-        )
+        print(detail)
 
     def on_api_error(self, packet: dict) -> None:
-        """用户登录请求回报"""
+        """Callback of login error"""
         code: str = packet["code"]
         msg: str = packet["msg"]
         self.gateway.write_log(f"Websocket Private API请求失败, 状态码：{code}, 信息：{msg}")
 
     def on_login(self, packet: dict) -> None:
-        """用户登录请求回报"""
+        """Callback of user login"""
         if packet["code"] == '0':
             self.gateway.write_log("Websocket Private API登录成功")
             self.subscribe_topic()
@@ -676,7 +691,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.write_log("Websocket Private API登录失败")
 
     def on_order(self, packet: dict) -> None:
-        """委托更新推送"""
+        """Callback of order update"""
         data: list = packet["data"]
         for d in data:
             order: OrderData = parse_order_data(d, self.gateway_name)
@@ -707,7 +722,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.on_trade(trade)
 
     def on_account(self, packet: dict) -> None:
-        """资金更新推送"""
+        """Callback of account balance update"""
         if len(packet["data"]) == 0:
             return
         buf: dict = packet["data"][0]
@@ -722,7 +737,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.on_account(account)
 
     def on_position(self, packet: dict) -> None:
-        """持仓更新推送"""
+        """Callback of holding position update"""
         data: list = packet["data"]
         for d in data:
             symbol: str = d["instId"]
@@ -742,7 +757,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.on_position(position)
 
     def on_send_order(self, packet: dict) -> None:
-        """委托下单回报"""
+        """Callback of send_order"""
         data: list = packet["data"]
 
         # 请求本身格式错误（没有委托的回报数据）
@@ -770,7 +785,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.write_log(f"委托失败，状态码：{code}，信息：{msg}")
 
     def on_cancel_order(self, packet: dict) -> None:
-        """委托撤单回报"""
+        """Callback of cancel order"""
         # 请求本身的格式错误
         if packet["code"] != "0":
             code: str = packet["code"]
@@ -789,7 +804,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.write_log(f"撤单失败，状态码：{code}，信息：{msg}")
 
     def login(self) -> None:
-        """用户登录"""
+        """User login"""
         timestamp: str = str(time.time())
         msg: str = timestamp + "GET" + "/users/self/verify"
         signature: bytes = generate_signature(msg, self.secret)
@@ -809,7 +824,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.send_packet(okx_req)
 
     def subscribe_topic(self) -> None:
-        """订阅委托、资金和持仓推送"""
+        """Subscribe topics"""
         okx_req: dict = {
             "op": "subscribe",
             "args": [
@@ -829,7 +844,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.send_packet(okx_req)
 
     def send_order(self, req: OrderRequest) -> str:
-        """委托下单"""
+        """Send new order"""
         # 检查委托类型是否正确
         if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
@@ -875,7 +890,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         return order.vt_orderid
 
     def cancel_order(self, req: CancelRequest) -> None:
-        """委托撤单"""
+        """Cancel existing order"""
         args: dict = {"instId": req.symbol}
 
         # 检查是否为本地委托号
@@ -894,25 +909,25 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
 
 def generate_signature(msg: str, secret_key: str) -> bytes:
-    """生成签名"""
+    """Generate signature from message"""
     return base64.b64encode(hmac.new(secret_key, msg.encode(), hashlib.sha256).digest())
 
 
 def generate_timestamp() -> str:
-    """生成时间戳"""
+    """Generate current timestamp"""
     now: datetime = datetime.utcnow()
     timestamp: str = now.isoformat("T", "milliseconds")
     return timestamp + "Z"
 
 
 def parse_timestamp(timestamp: str) -> datetime:
-    """解析回报时间戳"""
+    """Parse timestamp to datetime"""
     dt: datetime = datetime.fromtimestamp(int(timestamp) / 1000)
     return dt.replace(tzinfo=UTC_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
-    """获取字典中对应键的浮点数值"""
+    """Get decimal number from float value"""
     data_str: str = data.get(key, "")
     if not data_str:
         return 0.0
@@ -920,7 +935,7 @@ def get_float_value(data: dict, key: str) -> float:
 
 
 def parse_order_data(data: dict, gateway_name: str) -> OrderData:
-    """解析委托回报数据"""
+    """Parse dict to order data"""
     order_id: str = data["clOrdId"]
     if order_id:
         local_orderids.add(order_id)
