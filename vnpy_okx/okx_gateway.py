@@ -1,10 +1,3 @@
-"""
-1. 只支持单币种保证金模式
-2. 只支持全仓模式
-3. 只支持单向持仓模式
-"""
-
-
 import base64
 import hashlib
 import hmac
@@ -14,7 +7,6 @@ import time
 from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
-from typing import Any, Dict, List, Set
 from types import TracebackType
 
 from requests import Response
@@ -63,7 +55,7 @@ TEST_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerI
 TEST_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
 
 # 委托状态映射
-STATUS_OKX2VT: Dict[str, Status] = {
+STATUS_OKX2VT: dict[str, Status] = {
     "live": Status.NOTTRADED,
     "partially_filled": Status.PARTTRADED,
     "filled": Status.ALLTRADED,
@@ -71,40 +63,40 @@ STATUS_OKX2VT: Dict[str, Status] = {
 }
 
 # 委托类型映射
-ORDERTYPE_OKX2VT: Dict[str, OrderType] = {
+ORDERTYPE_OKX2VT: dict[str, OrderType] = {
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
 }
-ORDERTYPE_VT2OKX: Dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKX2VT.items()}
+ORDERTYPE_VT2OKX: dict[OrderType, str] = {v: k for k, v in ORDERTYPE_OKX2VT.items()}
 
 # 买卖方向映射
-DIRECTION_OKX2VT: Dict[str, Direction] = {
+DIRECTION_OKX2VT: dict[str, Direction] = {
     "buy": Direction.LONG,
     "sell": Direction.SHORT
 }
-DIRECTION_VT2OKX: Dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
+DIRECTION_VT2OKX: dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
 
 # 数据频率映射
-INTERVAL_VT2OKX: Dict[Interval, str] = {
+INTERVAL_VT2OKX: dict[Interval, str] = {
     Interval.MINUTE: "1m",
     Interval.HOUR: "1H",
     Interval.DAILY: "1D",
 }
 
 # 产品类型映射
-PRODUCT_OKX2VT: Dict[str, Product] = {
+PRODUCT_OKX2VT: dict[str, Product] = {
     "SWAP": Product.FUTURES,
     "SPOT": Product.SPOT,
     "FUTURES": Product.FUTURES
 }
-PRODUCT_VT2OKX: Dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
+PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
 
 # 合约数据全局缓存字典
-symbol_contract_map: Dict[str, ContractData] = {}
+symbol_contract_map: dict[str, ContractData] = {}
 
 # 本地委托号缓存集合
-local_orderids: Set[str] = set()
+local_orderids: set[str] = set()
 
 
 class OkxGateway(BaseGateway):
@@ -114,7 +106,7 @@ class OkxGateway(BaseGateway):
 
     default_name = "OKX"
 
-    default_setting: Dict[str, Any] = {
+    default_setting: dict = {
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
@@ -133,7 +125,7 @@ class OkxGateway(BaseGateway):
         self.ws_public_api: "OkxWebsocketPublicApi" = OkxWebsocketPublicApi(self)
         self.ws_private_api: "OkxWebsocketPrivateApi" = OkxWebsocketPrivateApi(self)
 
-        self.orders: Dict[str, OrderData] = {}
+        self.orders: dict[str, OrderData] = {}
 
     def connect(self, setting: dict) -> None:
         """连接交易接口"""
@@ -191,7 +183,7 @@ class OkxGateway(BaseGateway):
         """查询持仓"""
         pass
 
-    def query_history(self, req: HistoryRequest) -> List[BarData]:
+    def query_history(self, req: HistoryRequest) -> list[BarData]:
         """查询历史数据"""
         return self.rest_api.query_history(req)
 
@@ -375,13 +367,13 @@ class OkxRestApi(RestClient):
             self.exception_detail(exception_type, exception_value, tb, request)
         )
 
-    def query_history(self, req: HistoryRequest) -> List[BarData]:
+    def query_history(self, req: HistoryRequest) -> list[BarData]:
         """
         查询历史数据
 
         K线数据每个粒度最多可获取最近1440条
         """
-        buf: Dict[datetime, BarData] = {}
+        buf: dict[datetime, BarData] = {}
         end_time: str = ""
         path: str = "/api/v5/market/candles"
 
@@ -440,10 +432,10 @@ class OkxRestApi(RestClient):
                 # 更新结束时间
                 end_time = begin
 
-        index: List[datetime] = list(buf.keys())
+        index: list[datetime] = list(buf.keys())
         index.sort()
 
-        history: List[BarData] = [buf[i] for i in index]
+        history: list[BarData] = [buf[i] for i in index]
         return history
 
 
@@ -457,10 +449,10 @@ class OkxWebsocketPublicApi(WebsocketClient):
         self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
-        self.subscribed: Dict[str, SubscribeRequest] = {}
-        self.ticks: Dict[str, TickData] = {}
+        self.subscribed: dict[str, SubscribeRequest] = {}
+        self.ticks: dict[str, TickData] = {}
 
-        self.callbacks: Dict[str, callable] = {
+        self.callbacks: dict[str, callable] = {
             "tickers": self.on_ticker,
             "books5": self.on_depth
         }
@@ -595,7 +587,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.order_count: int = 0
         self.connect_time: int = 0
 
-        self.callbacks: Dict[str, callable] = {
+        self.callbacks: dict[str, callable] = {
             "login": self.on_login,
             "orders": self.on_order,
             "account": self.on_account,
@@ -605,7 +597,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             "error": self.on_api_error
         }
 
-        self.reqid_order_map: Dict[str, OrderData] = {}
+        self.reqid_order_map: dict[str, OrderData] = {}
 
     def connect(
         self,
