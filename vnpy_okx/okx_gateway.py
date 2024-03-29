@@ -41,7 +41,7 @@ from vnpy_websocket import WebsocketClient
 
 
 # 中国时区
-CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
+UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # 实盘和模拟盘REST API地址
 REST_HOST: str = "https://www.okx.com"
@@ -481,7 +481,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
             symbol=req.symbol,
             exchange=req.exchange,
             name=req.symbol,
-            datetime=datetime.now(CHINA_TZ),
+            datetime=datetime.now(UTC_TZ),
             gateway_name=self.gateway_name,
         )
         self.ticks[req.symbol] = tick
@@ -900,7 +900,7 @@ def generate_timestamp() -> str:
 def parse_timestamp(timestamp: str) -> datetime:
     """解析回报时间戳"""
     dt: datetime = datetime.fromtimestamp(int(timestamp) / 1000)
-    return dt.replace(tzinfo=CHINA_TZ)
+    return dt.replace(tzinfo=UTC_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
