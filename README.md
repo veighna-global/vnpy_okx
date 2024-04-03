@@ -1,56 +1,54 @@
-# vn.py框架的OKX底层接口
+# OKX trading gateway for VeighNa Evo
 
 <p align="center">
   <img src ="https://vnpy.oss-cn-shanghai.aliyuncs.com/vnpy-logo.png"/>
 </p>
 
 <p align="center">
-    <img src ="https://img.shields.io/badge/version-2021.4.21.5-blueviolet.svg"/>
-    <img src ="https://img.shields.io/badge/platform-windows|linux-yellow.svg"/>
-    <img src ="https://img.shields.io/badge/python-3.7-blue.svg" />
+    <img src ="https://img.shields.io/badge/version-2024.4.3-blueviolet.svg"/>
+    <img src ="https://img.shields.io/badge/platform-windows|linux|macos-yellow.svg"/>
+    <img src ="https://img.shields.io/badge/python-3.10|3.11|3.12-blue.svg" />
     <img src ="https://img.shields.io/github/license/vnpy/vnpy.svg?color=orange"/>
 </p>
 
-关于使用VeighNa框架进行Crypto交易的话题，新开了一个[Github Discussions论坛](https://github.com/vn-crypto/vnpy_crypto/discussions)，欢迎通过这里来进行讨论交流。
+## Introduction
 
-## 说明
+This gateway is developed based on OKX's V5 REST and Websocket API, and supports spot, linear contract and inverse contract trading.
 
-基于OKX交易所的V5接口开发，支持统一账户下的现货、期货、永续、期权交易。
+**For derivatives contract trading, please notice:**
 
-使用时需要注意本接口：
+1. Only supports one-way position mode.
 
-1. 只支持单币种保证金模式
-2. 只支持全仓保证金模式
-3. 只支持单向持仓模式
+## Install
 
-请在OKX网站完成账户的相应设置后再使用。
-
-## 安装
-
-安装需要基于2.2.0版本以上的[VN Studio](https://www.vnpy.com)。
-
-直接使用pip命令：
+Users can easily install ``vnpy_okx`` by pip according to the following command.
 
 ```
 pip install vnpy_okx
 ```
 
-下载解压后在cmd中运行
+Also, users can install ``vnpy_okx`` using the source code. Clone the repository and install as follows:
 
 ```
+git clone https://github.com/veighna-global/vnpy_okx.git && cd vnpy_okx
+
 python setup.py install
 ```
 
-## 使用
+## A Simple Example
 
-以脚本方式启动（script/run.py）：
+Save this as run.py.
 
 ```
-from vnpy.event import EventEngine
-from vnpy.trader.engine import MainEngine
-from vnpy.trader.ui import MainWindow, create_qapp
+from vnpy_evo.event import EventEngine
+from vnpy_evo.trader.engine import MainEngine
+from vnpy_evo.trader.ui import MainWindow, create_qapp
 
-from vnpy_okx import OkxGateway
+from vnpy_okx import (
+    BinanceSpotGateway,
+    BinanceLinearGateway,
+    BinanceInverseGateway
+)
 
 
 def main():
@@ -59,8 +57,10 @@ def main():
 
     event_engine = EventEngine()
     main_engine = MainEngine(event_engine)
-    main_engine.add_gateway(OkxGateway)
-    
+    main_engine.add_gateway(BinanceSpotGateway)
+    main_engine.add_gateway(BinanceLinearGateway)
+    main_engine.add_gateway(BinanceInverseGateway)
+
     main_window = MainWindow(main_engine, event_engine)
     main_window.showMaximized()
 

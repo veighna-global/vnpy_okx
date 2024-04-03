@@ -23,4 +23,4 @@
 from .okx_gateway import OkxGateway
 
 
-__version__ = "2024.3.29"
+__version__ = "2024.4.3"
