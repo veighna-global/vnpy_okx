@@ -209,7 +209,7 @@ class OkxGateway(BaseGateway):
 
     def on_order(self, order: OrderData) -> None:
         """Save a copy of order and then pus"""
-        self.orders[order.orderid] = order  # 先做一次缓存
+        self.orders[order.orderid] = order
         super().on_order(order)
 
     def get_order(self, orderid: str) -> OrderData:
@@ -238,7 +238,7 @@ class OkxRestApi(RestClient):
 
     def sign(self, request: Request) -> Request:
         """Standard callback for signing a request"""
-        # 签名
+        # Generate signature
         timestamp: str = generate_timestamp()
         request.data = json.dumps(request.data)
 
@@ -250,7 +250,7 @@ class OkxRestApi(RestClient):
         msg: str = timestamp + request.method + path + request.data
         signature: bytes = generate_signature(msg, self.secret)
 
-        # 添加请求头
+        # Add request header
         request.headers = {
             "OK-ACCESS-KEY": self.key,
             "OK-ACCESS-SIGN": signature.decode(),
@@ -349,7 +349,6 @@ class OkxRestApi(RestClient):
         data: list = packet["data"]
 
         for d in data:
-            # 提取信息生成合约对象
             symbol: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
@@ -372,7 +371,6 @@ class OkxRestApi(RestClient):
                 gateway_name=self.gateway_name,
             )
 
-            # 缓存合约信息并推送
             symbol_contract_map[contract.symbol] = contract
             self.gateway.on_contract(contract)
 
@@ -400,7 +398,7 @@ class OkxRestApi(RestClient):
         path: str = "/api/v5/market/candles"
 
         for i in range(15):
-            # 创建查询参数
+            # Create query params
             params: dict = {
                 "instId": req.symbol,
                 "bar": INTERVAL_VT2OKX[req.interval]
@@ -409,14 +407,14 @@ class OkxRestApi(RestClient):
             if end_time:
                 params["after"] = end_time
 
-            # 从Server获取响应
+            # Get response from server
             resp: Response = self.request(
                 "GET",
                 path,
                 params=params
             )
 
-            # 如果请求失败则终止循环
+            # Break loop if request is failed
             if resp.status_code // 100 != 2:
                 msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
                 self.gateway.write_log(msg)
@@ -451,7 +449,7 @@ class OkxRestApi(RestClient):
                 msg: str = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{parse_timestamp(begin)} - {parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
-                # 更新结束时间
+                # Update end time
                 end_time = begin
 
         index: list[datetime] = list(buf.keys())
@@ -503,10 +501,10 @@ class OkxWebsocketPublicApi(WebsocketClient):
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """Subscribe market data"""
-        # 缓存订阅记录
+        # Add subscribe record
         self.subscribed[req.vt_symbol] = req
 
-        # 创建TICK对象
+        # Create tick object
         tick: TickData = TickData(
             symbol=req.symbol,
             exchange=req.exchange,
@@ -516,7 +514,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         )
         self.ticks[req.symbol] = tick
 
-        # 发送订阅请求
+        # Send request to subscribe
         args: list = []
         for channel in ["tickers", "books5"]:
             args.append({
@@ -712,11 +710,11 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             order: OrderData = parse_order_data(d, self.gateway_name)
             self.gateway.on_order(order)
 
-            # 检查是否有成交
+            # Check if order is fileed
             if d["fillSz"] == "0":
                 return
 
-            # 将成交数量四舍五入到正确精度
+            # Round trade volume number
             trade_volume: float = float(d["fillSz"])
             contract: ContractData = symbol_contract_map.get(order.symbol, None)
             if contract:
@@ -775,7 +773,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """Callback of send_order"""
         data: list = packet["data"]
 
-        # 请求本身格式错误（没有委托的回报数据）
+        # Wrong parameters
         if packet["code"] != "0":
             if not data:
                 order: OrderData = self.reqid_order_map[packet["id"]]
@@ -783,7 +781,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
                 self.gateway.on_order(order)
                 return
 
-        # 业务逻辑处理失败
+        # Failed to process
         for d in data:
             code: str = d["sCode"]
             if code == "0":
@@ -801,14 +799,14 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
     def on_cancel_order(self, packet: dict) -> None:
         """Callback of cancel order"""
-        # 请求本身的格式错误
+        # Wrong parameters
         if packet["code"] != "0":
             code: str = packet["code"]
             msg: str = packet["msg"]
             self.gateway.write_log(f"撤单失败，状态码：{code}，信息：{msg}")
             return
 
-        # 业务逻辑处理失败
+        # Failed to process
         data: list = packet["data"]
         for d in data:
             code: str = d["sCode"]
@@ -860,23 +858,23 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
     def send_order(self, req: OrderRequest) -> str:
         """Send new order"""
-        # 检查委托类型是否正确
+        # Check order type
         if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
             return
 
-        # 检查合约代码是否正确
+        # Check symbol
         contract: ContractData = symbol_contract_map.get(req.symbol, None)
         if not contract:
             self.gateway.write_log(f"委托失败，找不到该合约代码{req.symbol}")
             return
 
-        # 生成本地委托号
+        # Generate local orderid
         self.order_count += 1
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
 
-        # 生成委托请求
+        # Generate order params
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
@@ -899,7 +897,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         }
         self.send_packet(okx_req)
 
-        # 推送提交中事件
+        # Push submitting event
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.gateway.on_order(order)
         return order.vt_orderid
@@ -908,7 +906,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """Cancel existing order"""
         args: dict = {"instId": req.symbol}
 
-        # 检查是否为本地委托号
+        # Check if order id is local id
         if req.orderid in local_orderids:
             args["clOrdId"] = req.orderid
         else:
