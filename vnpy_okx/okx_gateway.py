@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import sys
 import time
 from copy import copy
 from datetime import datetime
@@ -44,10 +43,10 @@ from vnpy_websocket import WebsocketClient
 UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
-REST_HOST: str = "https://www.okx.com"
-PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
-PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
-BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
+REAL_REST_HOST: str = "https://www.okx.com"
+REAL_PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
+REAL_PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
+REAL_BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
 # AWS server hosts
 AWS_REST_HOST: str = "https://aws.okx.com"
@@ -120,7 +119,7 @@ class OkxGateway(BaseGateway):
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
-        "服务器": ["REAL", "AWS", "DEMO"],
+        "Server": ["REAL", "AWS", "DEMO"],
         "Proxy Host": "",
         "Proxy Port": "",
     }
@@ -136,9 +135,9 @@ class OkxGateway(BaseGateway):
         """
         super().__init__(event_engine, gateway_name)
 
-        self.rest_api: "OkxRestApi" = OkxRestApi(self)
-        self.ws_public_api: "OkxWebsocketPublicApi" = OkxWebsocketPublicApi(self)
-        self.ws_private_api: "OkxWebsocketPrivateApi" = OkxWebsocketPrivateApi(self)
+        self.rest_api: OkxRestApi = OkxRestApi(self)
+        self.ws_public_api: OkxWebsocketPublicApi = OkxWebsocketPublicApi(self)
+        self.ws_private_api: OkxWebsocketPrivateApi = OkxWebsocketPrivateApi(self)
 
         self.orders: dict[str, OrderData] = {}
 
@@ -147,9 +146,9 @@ class OkxGateway(BaseGateway):
         key: str = setting["API Key"]
         secret: str = setting["Secret Key"]
         passphrase: str = setting["Passphrase"]
+        server: str = setting["Server"]
         proxy_host: str = setting["Proxy Host"]
         proxy_port: str = setting["Proxy Port"]
-        server: str = setting["服务器"]
 
         if proxy_port.isdigit():
             proxy_port = int(proxy_port)
@@ -160,22 +159,22 @@ class OkxGateway(BaseGateway):
             key,
             secret,
             passphrase,
+            server,
             proxy_host,
-            proxy_port,
-            server
+            proxy_port
         )
         self.ws_public_api.connect(
+            server,
             proxy_host,
             proxy_port,
-            server
         )
         self.ws_private_api.connect(
             key,
             secret,
             passphrase,
+            server,
             proxy_host,
             proxy_port,
-            server
         )
 
     def subscribe(self, req: SubscribeRequest) -> None:
@@ -270,9 +269,9 @@ class OkxRestApi(RestClient):
         key: str,
         secret: str,
         passphrase: str,
+        server: str,
         proxy_host: str,
         proxy_port: int,
-        server: str
     ) -> None:
         """Start server connection"""
         self.key = key
@@ -284,7 +283,15 @@ class OkxRestApi(RestClient):
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
-        self.init(REST_HOST, proxy_host, proxy_port)
+        server_hosts: dict[str, str] = {
+            "REAL": REAL_REST_HOST,
+            "AWS": AWS_REST_HOST,
+            "DEMO": DEMO_REST_HOST,
+        }
+
+        host: str = server_hosts[server]
+        self.init(host, proxy_host, proxy_port)
+
         self.start()
         self.gateway.write_log("REST API启动成功")
 
@@ -323,7 +330,7 @@ class OkxRestApi(RestClient):
         timestamp: int = int(packet["data"][0]["ts"])
         server_time: datetime = datetime.fromtimestamp(timestamp / 1000)
         local_time: datetime = datetime.now()
-        msg: str = f"服务器时间：{server_time}，本机时间：{local_time}"
+        msg: str = f"Server时间：{server_time}，本机时间：{local_time}"
         self.gateway.write_log(msg)
 
     def on_query_order(self, packet: dict, request: Request) -> None:
@@ -402,7 +409,7 @@ class OkxRestApi(RestClient):
             if end_time:
                 params["after"] = end_time
 
-            # 从服务器获取响应
+            # 从Server获取响应
             resp: Response = self.request(
                 "GET",
                 path,
@@ -478,15 +485,19 @@ class OkxWebsocketPublicApi(WebsocketClient):
 
     def connect(
         self,
+        server: str,
         proxy_host: str,
         proxy_port: int,
-        server: str
     ) -> None:
         """Start server connection"""
-        if server == "REAL":
-            self.init(PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
-        else:
-            self.init(TEST_PUBLIC_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+        server_hosts: dict[str, str] = {
+            "REAL": REAL_PUBLIC_WEBSOCKET_HOST,
+            "AWS": AWS_PUBLIC_WEBSOCKET_HOST,
+            "DEMO": DEMO_PUBLIC_WEBSOCKET_HOST,
+        }
+
+        host: str = server_hosts[server]
+        self.init(host, proxy_host, proxy_port, 20)
 
         self.start()
 
@@ -550,7 +561,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
 
     def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
         """General error callback"""
-        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+        detail: str = self.exception_detail(exception_type, exception_value, tb)
 
         msg: str = f"公共频道触发异常: {detail}"
         self.gateway.write_log(msg)
@@ -627,9 +638,9 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         key: str,
         secret: str,
         passphrase: str,
+        server: str,
         proxy_host: str,
         proxy_port: int,
-        server: str
     ) -> None:
         """Start server connection"""
         self.key = key
@@ -638,10 +649,14 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
-        if server == "REAL":
-            self.init(PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
-        else:
-            self.init(TEST_PRIVATE_WEBSOCKET_HOST, proxy_host, proxy_port, 20)
+        server_hosts: dict[str, str] = {
+            "REAL": REAL_PRIVATE_WEBSOCKET_HOST,
+            "AWS": AWS_PRIVATE_WEBSOCKET_HOST,
+            "DEMO": DEMO_PRIVATE_WEBSOCKET_HOST,
+        }
+
+        host: str = server_hosts[server]
+        self.init(host, proxy_host, proxy_port, 20)
 
         self.start()
 
@@ -669,7 +684,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
     def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
         """General error callback"""
-        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+        detail: str = self.exception_detail(exception_type, exception_value, tb)
 
         msg: str = f"私有频道触发异常: {detail}"
         self.gateway.write_log(msg)
