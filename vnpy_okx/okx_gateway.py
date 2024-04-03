@@ -293,7 +293,7 @@ class OkxRestApi(RestClient):
         self.init(host, proxy_host, proxy_port)
 
         self.start()
-        self.gateway.write_log("REST API启动成功")
+        self.gateway.write_log("REST API started")
 
         self.query_time()
         self.query_order()
@@ -330,7 +330,8 @@ class OkxRestApi(RestClient):
         timestamp: int = int(packet["data"][0]["ts"])
         server_time: datetime = datetime.fromtimestamp(timestamp / 1000)
         local_time: datetime = datetime.now()
-        msg: str = f"Server时间：{server_time}，本机时间：{local_time}"
+
+        msg: str = f"Server time: {server_time}, local time: {local_time}"
         self.gateway.write_log(msg)
 
     def on_query_order(self, packet: dict, request: Request) -> None:
@@ -342,7 +343,7 @@ class OkxRestApi(RestClient):
             )
             self.gateway.on_order(order)
 
-        self.gateway.write_log("委托信息查询成功")
+        self.gateway.write_log("Open orders data is received")
 
     def on_query_contract(self, packet: dict, request: Request) -> None:
         """Callback of available contracts query"""
@@ -374,7 +375,7 @@ class OkxRestApi(RestClient):
             symbol_contract_map[contract.symbol] = contract
             self.gateway.on_contract(contract)
 
-        self.gateway.write_log(f"{d['instType']}合约信息查询成功")
+        self.gateway.write_log(f"Available {d['instType']} contracts data is received")
 
     def on_error(
         self,
@@ -386,7 +387,7 @@ class OkxRestApi(RestClient):
         """General error callback"""
         detail: str = self.exception_detail(exception_type, exception_value, tb, request)
 
-        msg: str = f"REST触发异常: {detail}"
+        msg: str = f"Exception catched by REST API: {detail}"
         self.gateway.write_log(msg)
 
         print(detail)
@@ -416,7 +417,7 @@ class OkxRestApi(RestClient):
 
             # Break loop if request is failed
             if resp.status_code // 100 != 2:
-                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
+                msg = f"Query kline history failed, status code: {resp.status_code}, message: {resp.text}"
                 self.gateway.write_log(msg)
                 break
             else:
@@ -424,7 +425,7 @@ class OkxRestApi(RestClient):
 
                 if not data["data"]:
                     m = data["msg"]
-                    msg = f"获取历史数据为空，{m}"
+                    msg = f"No kline history data is received, {m}"
                     break
 
                 for bar_list in data["data"]:
@@ -446,7 +447,7 @@ class OkxRestApi(RestClient):
 
                 begin: str = data["data"][-1][0]
                 end: str = data["data"][0][0]
-                msg: str = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{parse_timestamp(begin)} - {parse_timestamp(end)}"
+                msg: str = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
                 # Update end time
@@ -530,14 +531,14 @@ class OkxWebsocketPublicApi(WebsocketClient):
 
     def on_connected(self) -> None:
         """Callback when server is connected"""
-        self.gateway.write_log("Websocket Public API连接成功")
+        self.gateway.write_log("Public websocket API is connected")
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
     def on_disconnected(self) -> None:
         """Callback when server is disconnected"""
-        self.gateway.write_log("Websocket Public API连接断开")
+        self.gateway.write_log("Public websocket API is disconnected")
 
     def on_packet(self, packet: dict) -> None:
         """Callback of data update"""
@@ -548,7 +549,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
             elif event == "error":
                 code: str = packet["code"]
                 msg: str = packet["msg"]
-                self.gateway.write_log(f"Websocket Public API请求异常, 状态码：{code}, 信息：{msg}")
+                self.gateway.write_log(f"Public websocket API request failed, status code: {code}, message: {msg}")
         else:
             channel: str = packet["arg"]["channel"]
             callback: callable = self.callbacks.get(channel, None)
@@ -561,7 +562,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         """General error callback"""
         detail: str = self.exception_detail(exception_type, exception_value, tb)
 
-        msg: str = f"公共频道触发异常: {detail}"
+        msg: str = f"Exception catched by public websocket API: {detail}"
         self.gateway.write_log(msg)
 
         print(detail)
@@ -660,12 +661,12 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
     def on_connected(self) -> None:
         """Callback when server is connected"""
-        self.gateway.write_log("Websocket Private API连接成功")
+        self.gateway.write_log("Private websocket API is connected")
         self.login()
 
     def on_disconnected(self) -> None:
         """Callback when server is disconnected"""
-        self.gateway.write_log("Websocket Private API连接断开")
+        self.gateway.write_log("Private websocket API is disconnected")
 
     def on_packet(self, packet: dict) -> None:
         """Callback of data update"""
@@ -693,15 +694,15 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """Callback of login error"""
         code: str = packet["code"]
         msg: str = packet["msg"]
-        self.gateway.write_log(f"Websocket Private API请求失败, 状态码：{code}, 信息：{msg}")
+        self.gateway.write_log(f"Priavte websocket API request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """Callback of user login"""
         if packet["code"] == '0':
-            self.gateway.write_log("Websocket Private API登录成功")
+            self.gateway.write_log("Private websocket API login successful")
             self.subscribe_topic()
         else:
-            self.gateway.write_log("Websocket Private API登录失败")
+            self.gateway.write_log("Private websocket API login failed")
 
     def on_order(self, packet: dict) -> None:
         """Callback of order update"""
@@ -795,7 +796,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             self.gateway.on_order(copy(order))
 
             msg: str = d["sMsg"]
-            self.gateway.write_log(f"委托失败，状态码：{code}，信息：{msg}")
+            self.gateway.write_log(f"Send order failed, status code: {code}, message: {msg}")
 
     def on_cancel_order(self, packet: dict) -> None:
         """Callback of cancel order"""
@@ -803,7 +804,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         if packet["code"] != "0":
             code: str = packet["code"]
             msg: str = packet["msg"]
-            self.gateway.write_log(f"撤单失败，状态码：{code}，信息：{msg}")
+            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
             return
 
         # Failed to process
@@ -814,7 +815,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
                 return
 
             msg: str = d["sMsg"]
-            self.gateway.write_log(f"撤单失败，状态码：{code}，信息：{msg}")
+            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
 
     def login(self) -> None:
         """User login"""
@@ -860,13 +861,13 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """Send new order"""
         # Check order type
         if req.type not in ORDERTYPE_VT2OKX:
-            self.gateway.write_log(f"委托失败，不支持的委托类型：{req.type.value}")
+            self.gateway.write_log(f"Send order failed, order type not supported: {req.type.value}")
             return
 
         # Check symbol
         contract: ContractData = symbol_contract_map.get(req.symbol, None)
         if not contract:
-            self.gateway.write_log(f"委托失败，找不到该合约代码{req.symbol}")
+            self.gateway.write_log(f"Send order failed, symbol not found: {req.symbol}")
             return
 
         # Generate local orderid
