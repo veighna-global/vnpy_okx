@@ -10,8 +10,8 @@ from types import TracebackType
 
 from requests import Response
 
-from vnpy.event.engine import EventEngine
-from vnpy.trader.constant import (
+from vnpy_evo.event import EventEngine
+from vnpy_evo.trader.constant import (
     Direction,
     Exchange,
     Interval,
@@ -20,9 +20,9 @@ from vnpy.trader.constant import (
     Product,
     Status
 )
-from vnpy.trader.gateway import BaseGateway
-from vnpy.trader.utility import round_to, ZoneInfo
-from vnpy.trader.object import (
+from vnpy_evo.trader.gateway import BaseGateway
+from vnpy_evo.trader.utility import round_to, ZoneInfo
+from vnpy_evo.trader.object import (
     AccountData,
     BarData,
     CancelRequest,
