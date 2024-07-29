@@ -71,6 +71,7 @@ STATUS_OKX2VT: dict[str, Status] = {
 
 # Order type map
 ORDERTYPE_OKX2VT: dict[str, OrderType] = {
+    "market": OrderType.MARKET,    # 2024-07-29 金泽宽修改
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
@@ -83,6 +84,13 @@ DIRECTION_OKX2VT: dict[str, Direction] = {
     "sell": Direction.SHORT
 }
 DIRECTION_VT2OKX: dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
+
+# Posside map        # 2024-07-29 金泽宽修改
+POSSIDE_OKX2VT: dict[str, Direction] = {
+    "long": Direction.LONG,
+    "short": Direction.SHORT
+}
+POSSIDE_VT2OKX: dict[Direction, str] = {v: k for k, v in POSSIDE_OKX2VT.items()}
 
 # Kline interval map
 INTERVAL_VT2OKX: dict[Interval, str] = {
@@ -874,13 +882,15 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.order_count += 1
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
-
+        if str(req.price) == "":    # 2024-07-29 金泽宽修改
+            req.price = "0"
         # Generate order params
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
             "side": DIRECTION_VT2OKX[req.direction],
             "ordType": ORDERTYPE_VT2OKX[req.type],
+            "posSide": POSSIDE_VT2OKX[req.direction],    # 2024-07-29 金泽宽修改
             "px": str(req.price),
             "sz": str(req.volume)
         }
@@ -955,7 +965,8 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
         local_orderids.add(order_id)
     else:
         order_id: str = data["ordId"]
-
+    if str(data["px"]) == "":        # 2024-07-29 金泽宽修改
+        (data["px"]) = "0"
     order: OrderData = OrderData(
         symbol=data["instId"],
         exchange=Exchange.OKX,
