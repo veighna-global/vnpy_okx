@@ -35,11 +35,11 @@ from vnpy_evo.trader.object import (
     TickData,
     TradeData
 )
-from vnpy_rest import Request, RestClient
-from vnpy_websocket import WebsocketClient
+from vnpy_evo.rest import Request, RestClient
+from vnpy_evo.websocket import WebsocketClient
 
 
-# 中国时区
+# Timezone constant
 UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
@@ -544,9 +544,9 @@ class OkxWebsocketPublicApi(WebsocketClient):
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
-    def on_disconnected(self) -> None:
+    def on_disconnected(self, status_code: int, msg: str) -> None:
         """Callback when server is disconnected"""
-        self.gateway.write_log("Public websocket API is disconnected")
+        self.gateway.write_log(f"Public websocket API is disconnected, code: {status_code}, msg: {msg}")
 
     def on_packet(self, packet: dict) -> None:
         """Callback of data update"""
@@ -672,9 +672,9 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.gateway.write_log("Private websocket API is connected")
         self.login()
 
-    def on_disconnected(self) -> None:
+    def on_disconnected(self, status_code: int, msg: str) -> None:
         """Callback when server is disconnected"""
-        self.gateway.write_log("Private websocket API is disconnected")
+        self.gateway.write_log(f"Private websocket API is disconnected, code: {status_code}, msg: {msg}")
 
     def on_packet(self, packet: dict) -> None:
         """Callback of data update"""
