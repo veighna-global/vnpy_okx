@@ -99,10 +99,6 @@ PRODUCT_OKX2VT: dict[str, Product] = {
 PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
 
 
-# Global set for local order id
-local_orderids: set[str] = set()
-
-
 class OkxGateway(BaseGateway):
     """
     The OKX trading gateway for VeighNa.
@@ -144,6 +140,7 @@ class OkxGateway(BaseGateway):
         self.proxy_port: int = 0
 
         self.orders: dict[str, OrderData] = {}
+        self.local_orderids: set[str] = set()
 
         self.symbol_contract_map: dict[str, ContractData] = {}
         self.name_contract_map: dict[str, ContractData] = {}
@@ -339,7 +336,7 @@ class OkxGateway(BaseGateway):
 
         order_id: str = data["clOrdId"]
         if order_id:
-            local_orderids.add(order_id)
+            self.local_orderids.add(order_id)
         else:
             order_id = data["ordId"]
 
@@ -941,6 +938,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
         self.gateway: OkxGateway = gateway
         self.gateway_name: str = gateway.gateway_name
+        self.local_orderids: set[str] = gateway.local_orderids
 
         self.key: str = ""
         self.secret: bytes = b""
@@ -1382,7 +1380,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
         # Determine the type of order ID to use for cancellation
         # OKX supports both client order ID and exchange order ID for cancellation
-        if req.orderid in local_orderids:
+        if req.orderid in self.local_orderids:
             # Use client order ID if it was created by this gateway instance
             args["clOrdId"] = req.orderid
         else:
