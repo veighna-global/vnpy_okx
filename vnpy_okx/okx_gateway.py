@@ -92,7 +92,7 @@ INTERVAL_VT2OKX: dict[Interval, str] = {
 
 # Product type map
 PRODUCT_OKX2VT: dict[str, Product] = {
-    "SWAP": Product.FUTURES,
+    "SWAP": Product.SWAP,
     "SPOT": Product.SPOT,
     "FUTURES": Product.FUTURES
 }
@@ -123,7 +123,7 @@ class OkxGateway(BaseGateway):
         "Proxy Port": 0,
     }
 
-    exchanges: Exchange = [Exchange.OKX]
+    exchanges: Exchange = [Exchange.GLOBAL]
 
     def __init__(self, event_engine: EventEngine, gateway_name: str) -> None:
         """
@@ -473,7 +473,7 @@ class OkxRestApi(RestClient):
         data: list = packet["data"]
 
         for d in data:
-            symbol: str = d["instId"]
+            name: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
             net_position: bool = True
 
@@ -482,10 +482,20 @@ class OkxRestApi(RestClient):
             else:
                 size = float(d["ctMult"])
 
+            match product:
+                case Product.SPOT:
+                    symbol: str = name.replace("-", "") + "_SPOT_OKX"
+                case Product.SWAP:
+                    base, quote, _ = name.split("-")
+                    symbol = base + quote + "_SWAP_OKX"
+                case Product.FUTURES:
+                    base, quote, expiry = name.split("-")
+                    symbol = base + quote + "_" + expiry + "_OKX"
+
             contract: ContractData = ContractData(
                 symbol=symbol,
-                exchange=Exchange.OKX,
-                name=symbol,
+                exchange=Exchange.GLOBAL,
+                name=name,
                 product=product,
                 size=size,
                 pricetick=float(d["tickSz"]),
@@ -502,8 +512,8 @@ class OkxRestApi(RestClient):
 
     def on_error(
         self,
-        exception_type: type,
-        exception_value: Exception,
+        exc: type,
+        value: Exception,
         tb: TracebackType,
         request: Request
     ) -> None:
@@ -514,17 +524,15 @@ class OkxRestApi(RestClient):
         It logs the exception details for troubleshooting.
 
         Parameters:
-            exception_type: Type of the exception
-            exception_value: Exception instance
+            exc: Type of the exception
+            value: Exception instance
             tb: Traceback object
             request: Original request object
         """
-        detail: str = self.exception_detail(exception_type, exception_value, tb, request)
+        detail: str = self.exception_detail(exc, value, tb, request)
 
         msg: str = f"Exception catched by REST API: {detail}"
         self.gateway.write_log(msg)
-
-        print(detail)
 
     def query_history(self, req: HistoryRequest) -> list[BarData]:
         """
@@ -741,7 +749,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 data: list = packet["data"]
                 callback(data)
 
-    def on_error(self, exception_type: type, exception_value: Exception, tb: TracebackType) -> None:
+    def on_error(self, exc: type, value: Exception, tb: TracebackType) -> None:
         """
         General error callback.
 
@@ -749,16 +757,14 @@ class OkxWebsocketPublicApi(WebsocketClient):
         It logs the exception details for troubleshooting.
 
         Parameters:
-            exception_type: Type of the exception
-            exception_value: Exception instance
+            exc: Type of the exception
+            value: Exception instance
             tb: Traceback object
         """
-        detail: str = self.exception_detail(exception_type, exception_value, tb)
+        detail: str = self.exception_detail(exc, value, tb)
 
         msg: str = f"Exception catched by public websocket API: {detail}"
         self.gateway.write_log(msg)
-
-        print(detail)
 
     def on_ticker(self, data: list) -> None:
         """
@@ -1055,7 +1061,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
             position: PositionData = PositionData(
                 symbol=symbol,
-                exchange=Exchange.OKX,
+                exchange=Exchange.GLOBAL,
                 direction=Direction.NET,
                 volume=pos,
                 price=price,
@@ -1364,7 +1370,7 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
 
     order: OrderData = OrderData(
         symbol=data["instId"],
-        exchange=Exchange.OKX,
+        exchange=Exchange.GLOBAL,
         type=ORDERTYPE_OKX2VT[data["ordType"]],
         orderid=order_id,
         direction=DIRECTION_OKX2VT[data["side"]],
