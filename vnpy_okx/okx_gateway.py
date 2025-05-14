@@ -658,7 +658,11 @@ class RestApi(RestClient):
 
         path: str = "/api/v5/market/history-candles"
         limit: str = "100"
-        after: str = str(int(req.start.timestamp() * 1000))
+
+        if not req.end:
+            req.end = datetime.now()
+
+        after: str = str(int(req.end.timestamp() * 1000))
 
         # Loop until no more data or request fails
         while True:
@@ -670,8 +674,6 @@ class RestApi(RestClient):
                 "after": after
             }
 
-            print("--------------------------------")
-            print(params)
             # Get response from server
             resp: Response = self.request(
                 "GET",
@@ -686,7 +688,6 @@ class RestApi(RestClient):
                 break
             else:
                 data: dict = resp.json()
-                print(data)
                 bar_data: list = data.get("data", None)
 
                 if not bar_data:
@@ -695,7 +696,7 @@ class RestApi(RestClient):
                     break
 
                 for row in bar_data:
-                    ts, op, hp, lp, cp, volume, turnover, _, finished = row
+                    ts, op, hp, lp, cp, volume, turnover, _, _ = row
 
                     dt: datetime = parse_timestamp(ts)
 
@@ -715,20 +716,19 @@ class RestApi(RestClient):
                     buf[bar.datetime] = bar
 
                 begin: str = bar_data[-1][0]
+                begin_dt: datetime = parse_timestamp(begin)
                 end: str = bar_data[0][0]
-                log_msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
+                end_dt: datetime = parse_timestamp(end)
+
+                log_msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {begin_dt} - {end_dt}"
                 self.gateway.write_log(log_msg)
 
                 # Break if all bars have been queried
-                if not finished or bar.datetime >= req.end:
-                    print("finished", finished)
-                    print("bar.datetime", bar.datetime)
-                    print("req.end", req.end)
+                if begin_dt <= req.start:
                     break
 
                 # Update start time
                 after = begin
-                print("###########", bar.datetime)
 
         index: list[datetime] = list(buf.keys())
         index.sort()
