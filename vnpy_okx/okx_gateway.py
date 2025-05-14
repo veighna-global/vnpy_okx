@@ -43,21 +43,21 @@ UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
 REAL_REST_HOST: str = "https://www.okx.com"
-REAL_PUBLIC_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
-REAL_PRIVATE_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
-REAL_BUSINESS_WEBSOCKET_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
+REAL_PUBLIC_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
+REAL_PRIVATE_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
+REAL_BUSINESS_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
 # AWS server hosts
 AWS_REST_HOST: str = "https://aws.okx.com"
-AWS_PUBLIC_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/public"
-AWS_PRIVATE_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/private"
-AWS_BUSINESS_WEBSOCKET_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/business"
+AWS_PUBLIC_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/public"
+AWS_PRIVATE_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/private"
+AWS_BUSINESS_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/business"
 
 # Demo server hosts
 DEMO_REST_HOST: str = "https://www.okx.com"
-DEMO_PUBLIC_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
-DEMO_PRIVATE_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
-DEMO_BUSINESS_WEBSOCKET_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
+DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
+DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
 
 # Order status map
 STATUS_OKX2VT: dict[str, Status] = {
@@ -647,20 +647,31 @@ class RestApi(RestClient):
         Returns:
             list[BarData]: List of historical kline data bars
         """
-        buf: dict[datetime, BarData] = {}
-        end_time: str = ""
-        path: str = "/api/v5/market/candles"
+        # Validate symbol exists in contract map
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Query kline history failed, symbol not found: {req.symbol}")
+            return []
 
-        for i in range(15):
+        # Initialize buffer for storing bars
+        buf: dict[datetime, BarData] = {}
+
+        path: str = "/api/v5/market/history-candles"
+        limit: str = "100"
+        after: str = str(int(req.start.timestamp() * 1000))
+
+        # Loop until no more data or request fails
+        while True:
             # Create query params
             params: dict = {
-                "instId": req.symbol,
-                "bar": INTERVAL_VT2OKX[req.interval]
+                "instId": contract.name,
+                "bar": INTERVAL_VT2OKX[req.interval],
+                "limit": limit,
+                "after": after
             }
 
-            if end_time:
-                params["after"] = end_time
-
+            print("--------------------------------")
+            print(params)
             # Get response from server
             resp: Response = self.request(
                 "GET",
@@ -670,26 +681,31 @@ class RestApi(RestClient):
 
             # Break loop if request is failed
             if resp.status_code // 100 != 2:
-                msg = f"Query kline history failed, status code: {resp.status_code}, message: {resp.text}"
-                self.gateway.write_log(msg)
+                log_msg: str = f"Query kline history failed, status code: {resp.status_code}, message: {resp.text}"
+                self.gateway.write_log(log_msg)
                 break
             else:
                 data: dict = resp.json()
+                print(data)
+                bar_data: list = data.get("data", None)
 
-                if not data["data"]:
-                    m = data["msg"]
-                    msg = f"No kline history data received, {m}"
+                if not bar_data:
+                    msg: str = data["msg"]
+                    log_msg = f"No kline history data received, {msg}"
                     break
 
-                for bar_list in data["data"]:
-                    ts, op, hp, lp, cp, vol, _ = bar_list
-                    dt = parse_timestamp(ts)
+                for row in bar_data:
+                    ts, op, hp, lp, cp, volume, turnover, _, finished = row
+
+                    dt: datetime = parse_timestamp(ts)
+
                     bar: BarData = BarData(
                         symbol=req.symbol,
                         exchange=req.exchange,
                         datetime=dt,
                         interval=req.interval,
-                        volume=float(vol),
+                        volume=float(volume),
+                        turnover=float(turnover),
                         open_price=float(op),
                         high_price=float(hp),
                         low_price=float(lp),
@@ -698,13 +714,21 @@ class RestApi(RestClient):
                     )
                     buf[bar.datetime] = bar
 
-                begin: str = data["data"][-1][0]
-                end: str = data["data"][0][0]
-                msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
-                self.gateway.write_log(msg)
+                begin: str = bar_data[-1][0]
+                end: str = bar_data[0][0]
+                log_msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
+                self.gateway.write_log(log_msg)
 
-                # Update end time
-                end_time = begin
+                # Break if all bars have been queried
+                if not finished or bar.datetime >= req.end:
+                    print("finished", finished)
+                    print("bar.datetime", bar.datetime)
+                    print("req.end", req.end)
+                    break
+
+                # Update start time
+                after = begin
+                print("###########", bar.datetime)
 
         index: list[datetime] = list(buf.keys())
         index.sort()
@@ -753,9 +777,9 @@ class PublicApi(WebsocketClient):
             proxy_port: Proxy server port
         """
         server_hosts: dict[str, str] = {
-            "REAL": REAL_PUBLIC_WEBSOCKET_HOST,
-            "AWS": AWS_PUBLIC_WEBSOCKET_HOST,
-            "DEMO": DEMO_PUBLIC_WEBSOCKET_HOST,
+            "REAL": REAL_PUBLIC_HOST,
+            "AWS": AWS_PUBLIC_HOST,
+            "DEMO": DEMO_PUBLIC_HOST,
         }
 
         host: str = server_hosts[server]
@@ -989,9 +1013,9 @@ class PrivateApi(WebsocketClient):
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
         server_hosts: dict[str, str] = {
-            "REAL": REAL_PRIVATE_WEBSOCKET_HOST,
-            "AWS": AWS_PRIVATE_WEBSOCKET_HOST,
-            "DEMO": DEMO_PRIVATE_WEBSOCKET_HOST,
+            "REAL": REAL_PRIVATE_HOST,
+            "AWS": AWS_PRIVATE_HOST,
+            "DEMO": DEMO_PRIVATE_HOST,
         }
 
         host: str = server_hosts[server]
