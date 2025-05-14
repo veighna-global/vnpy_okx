@@ -128,10 +128,6 @@ class OkxGateway(BaseGateway):
         """
         super().__init__(event_engine, gateway_name)
 
-        self.rest_api: OkxRestApi = OkxRestApi(self)
-        self.ws_public_api: OkxWebsocketPublicApi = OkxWebsocketPublicApi(self)
-        self.ws_private_api: OkxWebsocketPrivateApi = OkxWebsocketPrivateApi(self)
-
         self.key: str = ""
         self.secret: str = ""
         self.passphrase: str = ""
@@ -144,6 +140,10 @@ class OkxGateway(BaseGateway):
 
         self.symbol_contract_map: dict[str, ContractData] = {}
         self.name_contract_map: dict[str, ContractData] = {}
+
+        self.rest_api: RestApi = RestApi(self)
+        self.public_api: PublicApi = PublicApi(self)
+        self.private_api: PrivateApi = PrivateApi(self)
 
     def connect(self, setting: dict) -> None:
         """
@@ -176,12 +176,12 @@ class OkxGateway(BaseGateway):
         """
         Connect to OKX websocket API.
         """
-        self.ws_public_api.connect(
+        self.public_api.connect(
             self.server,
             self.proxy_host,
             self.proxy_port,
         )
-        self.ws_private_api.connect(
+        self.private_api.connect(
             self.key,
             self.secret,
             self.passphrase,
@@ -197,7 +197,7 @@ class OkxGateway(BaseGateway):
         Parameters:
             req: Subscription request object containing symbol information
         """
-        self.ws_public_api.subscribe(req)
+        self.public_api.subscribe(req)
 
     def send_order(self, req: OrderRequest) -> str:
         """
@@ -212,7 +212,7 @@ class OkxGateway(BaseGateway):
         Returns:
             str: The VeighNa order ID if successful, empty string otherwise
         """
-        return self.ws_private_api.send_order(req)
+        return self.private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """
@@ -224,7 +224,7 @@ class OkxGateway(BaseGateway):
         Parameters:
             req: Cancel request object containing order details
         """
-        self.ws_private_api.cancel_order(req)
+        self.private_api.cancel_order(req)
 
     def query_account(self) -> None:
         """
@@ -257,8 +257,8 @@ class OkxGateway(BaseGateway):
         This method stops all API connections and releases resources.
         """
         self.rest_api.stop()
-        self.ws_public_api.stop()
-        self.ws_private_api.stop()
+        self.public_api.stop()
+        self.private_api.stop()
 
     def on_order(self, order: OrderData) -> None:
         """
@@ -357,7 +357,7 @@ class OkxGateway(BaseGateway):
         return order
 
 
-class OkxRestApi(RestClient):
+class RestApi(RestClient):
     """The REST API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
@@ -713,7 +713,7 @@ class OkxRestApi(RestClient):
         return history
 
 
-class OkxWebsocketPublicApi(WebsocketClient):
+class PublicApi(WebsocketClient):
     """The public websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
@@ -924,7 +924,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
             self.gateway.on_tick(copy(tick))
 
 
-class OkxWebsocketPrivateApi(WebsocketClient):
+class PrivateApi(WebsocketClient):
     """The private websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
