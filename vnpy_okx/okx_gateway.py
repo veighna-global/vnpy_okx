@@ -98,8 +98,6 @@ PRODUCT_OKX2VT: dict[str, Product] = {
 }
 PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
 
-# Global dict for contract data
-symbol_contract_map: dict[str, ContractData] = {}
 
 # Global set for local order id
 local_orderids: set[str] = set()
@@ -138,7 +136,17 @@ class OkxGateway(BaseGateway):
         self.ws_public_api: OkxWebsocketPublicApi = OkxWebsocketPublicApi(self)
         self.ws_private_api: OkxWebsocketPrivateApi = OkxWebsocketPrivateApi(self)
 
+        self.key: str = ""
+        self.secret: str = ""
+        self.passphrase: str = ""
+        self.server: str = ""
+        self.proxy_host: str = ""
+        self.proxy_port: int = 0
+
         self.orders: dict[str, OrderData] = {}
+
+        self.symbol_contract_map: dict[str, ContractData] = {}
+        self.name_contract_map: dict[str, ContractData] = {}
 
     def connect(self, setting: dict) -> None:
         """
@@ -151,33 +159,38 @@ class OkxGateway(BaseGateway):
             setting: A dictionary containing connection parameters including
                     API credentials, server selection, and proxy configuration
         """
-        key: str = setting["API Key"]
-        secret: str = setting["Secret Key"]
-        passphrase: str = setting["Passphrase"]
-        server: str = setting["Server"]
-        proxy_host: str = setting["Proxy Host"]
-        proxy_port: int = setting["Proxy Port"]
+        self.key = setting["API Key"]
+        self.secret = setting["Secret Key"]
+        self.passphrase = setting["Passphrase"]
+        self.server = setting["Server"]
+        self.proxy_host = setting["Proxy Host"]
+        self.proxy_port = setting["Proxy Port"]
 
         self.rest_api.connect(
-            key,
-            secret,
-            passphrase,
-            server,
-            proxy_host,
-            proxy_port
+            self.key,
+            self.secret,
+            self.passphrase,
+            self.server,
+            self.proxy_host,
+            self.proxy_port
         )
+
+    def connect_ws_api(self) -> None:
+        """
+        Connect to OKX websocket API.
+        """
         self.ws_public_api.connect(
-            server,
-            proxy_host,
-            proxy_port,
+            self.server,
+            self.proxy_host,
+            self.proxy_port,
         )
         self.ws_private_api.connect(
-            key,
-            secret,
-            passphrase,
-            server,
-            proxy_host,
-            proxy_port,
+            self.key,
+            self.secret,
+            self.passphrase,
+            self.server,
+            self.proxy_host,
+            self.proxy_port,
         )
 
     def subscribe(self, req: SubscribeRequest) -> None:
@@ -272,6 +285,80 @@ class OkxGateway(BaseGateway):
         """
         return self.orders.get(orderid, None)
 
+    def on_contract(self, contract: ContractData) -> None:
+        """
+        Save a copy of contract and then push to event engine.
+
+        Parameters:
+            contract: Contract data object
+        """
+        self.symbol_contract_map[contract.symbol] = contract
+        self.name_contract_map[contract.name] = contract
+
+        super().on_contract(contract)
+
+    def get_contract_by_symbol(self, symbol: str) -> ContractData | None:
+        """
+        Get contract by VeighNa symbol.
+
+        Parameters:
+            symbol: The symbol of the contract
+
+        Returns:
+            ContractData: Contract data object if found, None otherwise
+        """
+        return self.symbol_contract_map.get(symbol, None)
+
+    def get_contract_by_name(self, name: str) -> ContractData | None:
+        """
+        Get contract by exchange symbol name.
+
+        Parameters:
+            name: The name of the contract
+
+        Returns:
+            ContractData: Contract data object if found, None otherwise
+        """
+        return self.name_contract_map.get(name, None)
+
+    def parse_order_data(self, data: dict, gateway_name: str) -> OrderData:
+        """
+        Parse dict to order data.
+
+        This function converts OKX order data into a VeighNa OrderData object.
+        It extracts and maps all relevant fields from the exchange response.
+
+        Parameters:
+            data: Order data from OKX
+            gateway_name: Gateway name for identification
+
+        Returns:
+            OrderData: VeighNa order object
+        """
+        contract: ContractData = self.get_contract_by_name(data["instId"])
+
+        order_id: str = data["clOrdId"]
+        if order_id:
+            local_orderids.add(order_id)
+        else:
+            order_id = data["ordId"]
+
+        order: OrderData = OrderData(
+            symbol=contract.symbol,
+            exchange=Exchange.GLOBAL,
+            type=ORDERTYPE_OKX2VT[data["ordType"]],
+            orderid=order_id,
+            direction=DIRECTION_OKX2VT[data["side"]],
+            offset=Offset.NONE,
+            traded=float(data["accFillSz"]),
+            price=float(data["px"]),
+            volume=float(data["sz"]),
+            datetime=parse_timestamp(data["cTime"]),
+            status=STATUS_OKX2VT[data["state"]],
+            gateway_name=gateway_name,
+        )
+        return order
+
 
 class OkxRestApi(RestClient):
     """The REST API of OkxGateway"""
@@ -292,6 +379,8 @@ class OkxRestApi(RestClient):
         self.secret: bytes = b""
         self.passphrase: str = ""
         self.simulated: bool = False
+
+        self.product_ready: set = set()
 
     def sign(self, request: Request) -> Request:
         """
@@ -451,13 +540,13 @@ class OkxRestApi(RestClient):
             request: Original request object
         """
         for order_info in packet["data"]:
-            order: OrderData = parse_order_data(
+            order: OrderData = self.gateway.parse_order_data(
                 order_info,
                 self.gateway_name
             )
             self.gateway.on_order(order)
 
-        self.gateway.write_log("Open orders data is received")
+        self.gateway.write_log("Order data received")
 
     def on_query_contract(self, packet: dict, request: Request) -> None:
         """
@@ -505,10 +594,15 @@ class OkxRestApi(RestClient):
                 gateway_name=self.gateway_name,
             )
 
-            symbol_contract_map[contract.symbol] = contract
             self.gateway.on_contract(contract)
 
-        self.gateway.write_log(f"Available {d['instType']} contracts data is received")
+        self.gateway.write_log(f"{d['instType']} contract data received")
+
+        # Connect to websocket API after all contract data received
+        self.product_ready.add(contract.product)
+
+        if len(self.product_ready) == len(PRODUCT_OKX2VT):
+            self.gateway.connect_ws_api()
 
     def on_error(
         self,
@@ -578,7 +672,7 @@ class OkxRestApi(RestClient):
 
                 if not data["data"]:
                     m = data["msg"]
-                    msg = f"No kline history data is received, {m}"
+                    msg = f"No kline history data received, {m}"
                     break
 
                 for bar_list in data["data"]:
@@ -673,6 +767,12 @@ class OkxWebsocketPublicApi(WebsocketClient):
         Parameters:
             req: Subscription request object containing symbol information
         """
+        # Get contract by VeighNa symbol
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Failed to subscribe data, symbol not found: {req.symbol}")
+            return
+
         # Add subscribe record
         self.subscribed[req.vt_symbol] = req
 
@@ -680,18 +780,18 @@ class OkxWebsocketPublicApi(WebsocketClient):
         tick: TickData = TickData(
             symbol=req.symbol,
             exchange=req.exchange,
-            name=req.symbol,
+            name=contract.name,
             datetime=datetime.now(UTC_TZ),
             gateway_name=self.gateway_name,
         )
-        self.ticks[req.symbol] = tick
+        self.ticks[contract.name] = tick
 
         # Send request to subscribe
         args: list = []
         for channel in ["tickers", "books5"]:
             args.append({
                 "channel": channel,
-                "instId": req.symbol
+                "instId": contract.name
             })
 
         packet: dict = {
@@ -708,7 +808,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         is successfully established. It logs the connection status and
         resubscribes to previously subscribed market data channels.
         """
-        self.gateway.write_log("Public websocket API is connected")
+        self.gateway.write_log("Public API connected")
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
@@ -720,7 +820,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         This function is called when the websocket connection is closed.
         It logs the disconnection status.
         """
-        self.gateway.write_log("Public websocket API is disconnected")
+        self.gateway.write_log("Public API disconnected")
 
     def on_packet(self, packet: dict) -> None:
         """
@@ -740,7 +840,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
             elif event == "error":
                 code: str = packet["code"]
                 msg: str = packet["msg"]
-                self.gateway.write_log(f"Public websocket API request failed, status code: {code}, message: {msg}")
+                self.gateway.write_log(f"Public API request failed, status code: {code}, message: {msg}")
         else:
             channel: str = packet["arg"]["channel"]
             callback: Callable | None = self.callbacks.get(channel, None)
@@ -763,7 +863,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         """
         detail: str = self.exception_detail(exc, value, tb)
 
-        msg: str = f"Exception catched by public websocket API: {detail}"
+        msg: str = f"Exception catched by Public API: {detail}"
         self.gateway.write_log(msg)
 
     def on_ticker(self, data: list) -> None:
@@ -778,11 +878,16 @@ class OkxWebsocketPublicApi(WebsocketClient):
         """
         for d in data:
             tick: TickData = self.ticks[d["instId"]]
+
             tick.last_price = float(d["last"])
             tick.open_price = float(d["open24h"])
             tick.high_price = float(d["high24h"])
             tick.low_price = float(d["low24h"])
             tick.volume = float(d["vol24h"])
+            tick.turnover = float(d["volCcy24h"])
+
+            tick.datetime = parse_timestamp(d["ts"])
+            self.gateway.on_tick(copy(tick))
 
     def on_depth(self, data: list) -> None:
         """
@@ -895,7 +1000,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         is successfully established. It logs the connection status and
         initiates the login process.
         """
-        self.gateway.write_log("Private websocket API is connected")
+        self.gateway.write_log("Private websocket API connected")
         self.login()
 
     def on_disconnected(self) -> None:
@@ -905,7 +1010,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         This function is called when the websocket connection is closed.
         It logs the disconnection status.
         """
-        self.gateway.write_log("Private websocket API is disconnected")
+        self.gateway.write_log("Private API disconnected")
 
     def on_packet(self, packet: dict) -> None:
         """
@@ -957,7 +1062,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         msg: str = packet["msg"]
 
         # Log the error with details for debugging
-        self.gateway.write_log(f"Private websocket API request failed, status code: {code}, message: {msg}")
+        self.gateway.write_log(f"Private API request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """
@@ -970,10 +1075,10 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             packet: Login response data from websocket
         """
         if packet["code"] == '0':
-            self.gateway.write_log("Private websocket API login successful")
+            self.gateway.write_log("Private API login successful")
             self.subscribe_topic()
         else:
-            self.gateway.write_log("Private websocket API login failed")
+            self.gateway.write_log("Private API login failed")
 
     def on_order(self, packet: dict) -> None:
         """
@@ -989,7 +1094,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         data: list = packet["data"]
         for d in data:
             # Create order object from data
-            order: OrderData = parse_order_data(d, self.gateway_name)
+            order: OrderData = self.gateway.parse_order_data(d, self.gateway_name)
             self.gateway.on_order(order)
 
             # Check if order is filled - skip trade creation if no fill size
@@ -999,7 +1104,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             # Process trade data for filled or partially filled orders
             # Round trade volume number to meet minimum volume precision
             trade_volume: float = float(d["fillSz"])
-            contract: ContractData = symbol_contract_map.get(order.symbol, None)
+            contract: ContractData = self.gateway.get_contract_by_symbol(order.symbol)
             if contract:
                 trade_volume = round_to(trade_volume, contract.min_volume)
 
@@ -1054,13 +1159,15 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """
         data: list = packet["data"]
         for d in data:
-            symbol: str = d["instId"]
+            name: str = d["instId"]
+            contract: ContractData = self.gateway.get_contract_by_name(name)
+
             pos: float = float(d["pos"])
             price: float = get_float_value(d, "avgPx")
             pnl: float = get_float_value(d, "upl")
 
             position: PositionData = PositionData(
-                symbol=symbol,
+                symbol=contract.symbol,
                 exchange=Exchange.GLOBAL,
                 direction=Direction.NET,
                 volume=pos,
@@ -1202,7 +1309,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             return ""
 
         # Validate symbol exists in contract map
-        contract: ContractData = symbol_contract_map.get(req.symbol, None)
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
         if not contract:
             self.gateway.write_log(f"Send order failed, symbol not found: {req.symbol}")
             return ""
@@ -1214,7 +1321,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
 
         # Prepare order parameters for OKX API
         args: dict = {
-            "instId": req.symbol,
+            "instId": contract.name,
             "clOrdId": orderid,
             "side": DIRECTION_VT2OKX[req.direction],
             "ordType": ORDERTYPE_VT2OKX[req.type],
@@ -1346,40 +1453,3 @@ def get_float_value(data: dict, key: str) -> float:
     if not data_str:
         return 0.0
     return float(data_str)
-
-
-def parse_order_data(data: dict, gateway_name: str) -> OrderData:
-    """
-    Parse dict to order data.
-
-    This function converts OKX order data into a VeighNa OrderData object.
-    It extracts and maps all relevant fields from the exchange response.
-
-    Parameters:
-        data: Order data from OKX
-        gateway_name: Gateway name for identification
-
-    Returns:
-        OrderData: VeighNa order object
-    """
-    order_id: str = data["clOrdId"]
-    if order_id:
-        local_orderids.add(order_id)
-    else:
-        order_id = data["ordId"]
-
-    order: OrderData = OrderData(
-        symbol=data["instId"],
-        exchange=Exchange.GLOBAL,
-        type=ORDERTYPE_OKX2VT[data["ordType"]],
-        orderid=order_id,
-        direction=DIRECTION_OKX2VT[data["side"]],
-        offset=Offset.NONE,
-        traded=float(data["accFillSz"]),
-        price=float(data["px"]),
-        volume=float(data["sz"]),
-        datetime=parse_timestamp(data["cTime"]),
-        status=STATUS_OKX2VT[data["state"]],
-        gateway_name=gateway_name,
-    )
-    return order
