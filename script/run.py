@@ -5,8 +5,8 @@ from vnpy.trader.ui import MainWindow, create_qapp
 from vnpy_okx import OkxGateway
 
 
-def main():
-    """主入口函数"""
+def main() -> None:
+    """main entry"""
     qapp = create_qapp()
 
     event_engine = EventEngine()
