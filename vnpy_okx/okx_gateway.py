@@ -395,9 +395,17 @@ class OkxRestApi(RestClient):
         Returns:
             Request: Modified request with authentication parameters
         """
+        # Public API does not need to sign
+        if "public" in request.path:
+            return request
+
         # Generate signature
         timestamp: str = generate_timestamp()
-        request.data = json.dumps(request.data)
+
+        if request.data:
+            request.data = json.dumps(request.data)
+        else:
+            request.data = ""
 
         if request.params:
             path: str = request.path + "?" + urlencode(request.params)
@@ -448,7 +456,7 @@ class OkxRestApi(RestClient):
         self.secret = secret.encode()
         self.passphrase = passphrase
 
-        if server == "TEST":
+        if server == "DEMO":
             self.simulated = True
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
@@ -466,7 +474,6 @@ class OkxRestApi(RestClient):
         self.gateway.write_log("REST API started")
 
         self.query_time()
-        self.query_order()
         self.query_contract()
 
     def query_time(self) -> None:
@@ -602,6 +609,8 @@ class OkxRestApi(RestClient):
         self.product_ready.add(contract.product)
 
         if len(self.product_ready) == len(PRODUCT_OKX2VT):
+            self.query_order()
+
             self.gateway.connect_ws_api()
 
     def on_error(
@@ -1362,8 +1371,14 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Parameters:
             req: Cancel request object containing order details
         """
+        # Validate symbol exists in contract map
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Cancel order failed, symbol not found: {req.symbol}")
+            return
+
         # Initialize cancel parameters with instrument ID
-        args: dict = {"instId": req.symbol}
+        args: dict = {"instId": contract.name}
 
         # Determine the type of order ID to use for cancellation
         # OKX supports both client order ID and exchange order ID for cancellation
