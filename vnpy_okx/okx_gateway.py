@@ -8,7 +8,6 @@ from datetime import datetime
 from urllib.parse import urlencode
 from types import TracebackType
 from collections.abc import Callable
-from typing import cast
 
 from vnpy.event import EventEngine
 from vnpy.trader.constant import (
@@ -39,7 +38,7 @@ from vnpy_rest import Request, Response, RestClient
 from vnpy_websocket import WebsocketClient
 
 
-# 中国时区
+# UTC timezone
 UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
@@ -194,17 +193,23 @@ class OkxGateway(BaseGateway):
         """
         Send new order to OKX.
 
+        This function delegates order placement to the private websocket API,
+        which handles validation, order generation, and submission to the exchange.
+
         Parameters:
             req: Order request object containing order details
 
         Returns:
-            str: The orderid if successful, otherwise empty string
+            str: The VeighNa order ID if successful, empty string otherwise
         """
         return self.ws_private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """
         Cancel existing order on OKX.
+
+        This function delegates order cancellation to the private websocket API,
+        which determines the appropriate ID type to use and submits the request.
 
         Parameters:
             req: Cancel request object containing order details
@@ -928,7 +933,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Parameters:
             e: The exception that was raised
         """
-        msg: str = f"私有频道触发异常: {e}"
+        msg: str = f"Private channel exception triggered: {e}"
         self.gateway.write_log(msg)
 
     def on_api_error(self, packet: dict) -> None:
@@ -941,9 +946,12 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Parameters:
             packet: Error data from websocket
         """
+        # Extract error code and message from the response
         code: str = packet["code"]
         msg: str = packet["msg"]
-        self.gateway.write_log(f"Priavte websocket API request failed, status code: {code}, message: {msg}")
+
+        # Log the error with details for debugging
+        self.gateway.write_log(f"Private websocket API request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """
@@ -971,21 +979,25 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Parameters:
             packet: Order update data from websocket
         """
+        # Extract order data from packet
         data: list = packet["data"]
         for d in data:
+            # Create order object from data
             order: OrderData = parse_order_data(d, self.gateway_name)
             self.gateway.on_order(order)
 
-            # Check if order is fileed
+            # Check if order is filled - skip trade creation if no fill size
             if d["fillSz"] == "0":
                 return
 
-            # Round trade volume number
+            # Process trade data for filled or partially filled orders
+            # Round trade volume number to meet minimum volume precision
             trade_volume: float = float(d["fillSz"])
             contract: ContractData = symbol_contract_map.get(order.symbol, None)
             if contract:
                 trade_volume = round_to(trade_volume, contract.min_volume)
 
+            # Create trade object and push to gateway
             trade: TradeData = TradeData(
                 symbol=order.symbol,
                 exchange=order.exchange,
@@ -1012,6 +1024,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         """
         if len(packet["data"]) == 0:
             return
+
         buf: dict = packet["data"][0]
         for detail in buf["details"]:
             account: AccountData = AccountData(
@@ -1177,23 +1190,23 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Returns:
             str: The VeighNa order ID if successful, empty string otherwise
         """
-        # Check order type
+        # Validate order type is supported by OKX
         if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"Send order failed, order type not supported: {req.type.value}")
             return ""
 
-        # Check symbol
+        # Validate symbol exists in contract map
         contract: ContractData = symbol_contract_map.get(req.symbol, None)
         if not contract:
             self.gateway.write_log(f"Send order failed, symbol not found: {req.symbol}")
             return ""
 
-        # Generate local orderid
+        # Generate unique local order ID
         self.order_count += 1
         count_str = str(self.order_count).rjust(6, "0")
         orderid = f"{self.connect_time}{count_str}"
 
-        # Generate order params
+        # Prepare order parameters for OKX API
         args: dict = {
             "instId": req.symbol,
             "clOrdId": orderid,
@@ -1203,11 +1216,14 @@ class OkxWebsocketPrivateApi(WebsocketClient):
             "sz": str(req.volume)
         }
 
+        # Set trading mode based on product type
+        # "cash" for spot trading, "cross" for futures/swap with cross margin
         if contract.product == Product.SPOT:
             args["tdMode"] = "cash"
         else:
             args["tdMode"] = "cross"
 
+        # Create websocket request with unique request ID
         self.reqid += 1
         packet: dict = {
             "id": str(self.reqid),
@@ -1216,10 +1232,12 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         }
         self.send_packet(packet)
 
-        # Push submitting event
+        # Create order data object and push to gateway
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.gateway.on_order(order)
-        return cast(str, order.vt_orderid)
+
+        # Return VeighNa order ID (gateway_name.orderid)
+        return str(order.vt_orderid)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """
@@ -1231,20 +1249,27 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         Parameters:
             req: Cancel request object containing order details
         """
+        # Initialize cancel parameters with instrument ID
         args: dict = {"instId": req.symbol}
 
-        # Check if order id is local id
+        # Determine the type of order ID to use for cancellation
+        # OKX supports both client order ID and exchange order ID for cancellation
         if req.orderid in local_orderids:
+            # Use client order ID if it was created by this gateway instance
             args["clOrdId"] = req.orderid
         else:
+            # Use exchange order ID if it came from another source
             args["ordId"] = req.orderid
 
+        # Create websocket request with unique request ID
         self.reqid += 1
         packet: dict = {
             "id": str(self.reqid),
             "op": "cancel-order",
             "args": [args]
         }
+
+        # Send the cancellation request
         self.send_packet(packet)
 
 
