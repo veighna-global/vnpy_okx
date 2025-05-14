@@ -7,11 +7,11 @@ from copy import copy
 from datetime import datetime
 from urllib.parse import urlencode
 from types import TracebackType
+from collections.abc import Callable
+from typing import cast
 
-from requests import Response
-
-from vnpy_evo.event import EventEngine
-from vnpy_evo.trader.constant import (
+from vnpy.event import EventEngine
+from vnpy.trader.constant import (
     Direction,
     Exchange,
     Interval,
@@ -20,9 +20,9 @@ from vnpy_evo.trader.constant import (
     Product,
     Status
 )
-from vnpy_evo.trader.gateway import BaseGateway
-from vnpy_evo.trader.utility import round_to, ZoneInfo
-from vnpy_evo.trader.object import (
+from vnpy.trader.gateway import BaseGateway
+from vnpy.trader.utility import round_to, ZoneInfo
+from vnpy.trader.object import (
     AccountData,
     BarData,
     CancelRequest,
@@ -35,7 +35,7 @@ from vnpy_evo.trader.object import (
     TickData,
     TradeData
 )
-from vnpy_rest import Request, RestClient
+from vnpy_rest import Request, Response, RestClient
 from vnpy_websocket import WebsocketClient
 
 
@@ -121,7 +121,7 @@ class OkxGateway(BaseGateway):
         "Passphrase": "",
         "Server": ["REAL", "AWS", "DEMO"],
         "Proxy Host": "",
-        "Proxy Port": "",
+        "Proxy Port": 0,
     }
 
     exchanges: Exchange = [Exchange.OKX]
@@ -148,12 +148,7 @@ class OkxGateway(BaseGateway):
         passphrase: str = setting["Passphrase"]
         server: str = setting["Server"]
         proxy_host: str = setting["Proxy Host"]
-        proxy_port: str = setting["Proxy Port"]
-
-        if proxy_port.isdigit():
-            proxy_port = int(proxy_port)
-        else:
-            proxy_port = 0
+        proxy_port: int = setting["Proxy Port"]
 
         self.rest_api.connect(
             key,
@@ -232,7 +227,7 @@ class OkxRestApi(RestClient):
         self.gateway_name: str = gateway.gateway_name
 
         self.key: str = ""
-        self.secret: str = ""
+        self.secret: bytes = b""
         self.passphrase: str = ""
         self.simulated: bool = False
 
@@ -245,7 +240,7 @@ class OkxRestApi(RestClient):
         if request.params:
             path: str = request.path + "?" + urlencode(request.params)
         else:
-            path: str = request.path
+            path = request.path
 
         msg: str = timestamp + request.method + path + request.data
         signature: bytes = generate_signature(msg, self.secret)
@@ -357,7 +352,7 @@ class OkxRestApi(RestClient):
             if product == Product.SPOT:
                 size: float = 1
             else:
-                size: float = float(d["ctMult"])
+                size = float(d["ctMult"])
 
             contract: ContractData = ContractData(
                 symbol=symbol,
@@ -429,7 +424,7 @@ class OkxRestApi(RestClient):
                     break
 
                 for bar_list in data["data"]:
-                    ts, o, h, l, c, vol, _ = bar_list
+                    ts, op, hp, lp, cp, vol, _ = bar_list
                     dt = parse_timestamp(ts)
                     bar: BarData = BarData(
                         symbol=req.symbol,
@@ -437,17 +432,17 @@ class OkxRestApi(RestClient):
                         datetime=dt,
                         interval=req.interval,
                         volume=float(vol),
-                        open_price=float(o),
-                        high_price=float(h),
-                        low_price=float(l),
-                        close_price=float(c),
+                        open_price=float(op),
+                        high_price=float(hp),
+                        low_price=float(lp),
+                        close_price=float(cp),
                         gateway_name=self.gateway_name
                     )
                     buf[bar.datetime] = bar
 
                 begin: str = data["data"][-1][0]
                 end: str = data["data"][0][0]
-                msg: str = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
+                msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {parse_timestamp(begin)} - {parse_timestamp(end)}"
                 self.gateway.write_log(msg)
 
                 # Update end time
@@ -477,7 +472,7 @@ class OkxWebsocketPublicApi(WebsocketClient):
         self.subscribed: dict[str, SubscribeRequest] = {}
         self.ticks: dict[str, TickData] = {}
 
-        self.callbacks: dict[str, callable] = {
+        self.callbacks: dict[str, Callable] = {
             "tickers": self.on_ticker,
             "books5": self.on_depth
         }
@@ -523,11 +518,11 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 "instId": req.symbol
             })
 
-        req: dict = {
+        packet: dict = {
             "op": "subscribe",
             "args": args
         }
-        self.send_packet(req)
+        self.send_packet(packet)
 
     def on_connected(self) -> None:
         """Callback when server is connected"""
@@ -552,13 +547,13 @@ class OkxWebsocketPublicApi(WebsocketClient):
                 self.gateway.write_log(f"Public websocket API request failed, status code: {code}, message: {msg}")
         else:
             channel: str = packet["arg"]["channel"]
-            callback: callable = self.callbacks.get(channel, None)
+            callback: Callable | None = self.callbacks.get(channel, None)
 
             if callback:
                 data: list = packet["data"]
                 callback(data)
 
-    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+    def on_error(self, exception_type: type, exception_value: Exception, tb: TracebackType) -> None:
         """General error callback"""
         detail: str = self.exception_detail(exception_type, exception_value, tb)
 
@@ -613,14 +608,14 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.gateway_name: str = gateway.gateway_name
 
         self.key: str = ""
-        self.secret: str = ""
+        self.secret: bytes = b""
         self.passphrase: str = ""
 
         self.reqid: int = 0
         self.order_count: int = 0
         self.connect_time: int = 0
 
-        self.callbacks: dict[str, callable] = {
+        self.callbacks: dict[str, Callable] = {
             "login": self.on_login,
             "orders": self.on_order,
             "account": self.on_account,
@@ -673,22 +668,18 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         if "event" in packet:
             cb_name: str = packet["event"]
         elif "op" in packet:
-            cb_name: str = packet["op"]
+            cb_name = packet["op"]
         else:
-            cb_name: str = packet["arg"]["channel"]
+            cb_name = packet["arg"]["channel"]
 
-        callback: callable = self.callbacks.get(cb_name, None)
+        callback: Callable | None = self.callbacks.get(cb_name, None)
         if callback:
             callback(packet)
 
-    def on_error(self, exception_type: type, exception_value: Exception, tb) -> None:
+    def on_error(self, e: Exception) -> None:
         """General error callback"""
-        detail: str = self.exception_detail(exception_type, exception_value, tb)
-
-        msg: str = f"私有频道触发异常: {detail}"
+        msg: str = f"私有频道触发异常: {e}"
         self.gateway.write_log(msg)
-
-        print(detail)
 
     def on_api_error(self, packet: dict) -> None:
         """Callback of login error"""
@@ -755,7 +746,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         data: list = packet["data"]
         for d in data:
             symbol: str = d["instId"]
-            pos: int = float(d["pos"])
+            pos: float = float(d["pos"])
             price: float = get_float_value(d, "avgPx")
             pnl: float = get_float_value(d, "upl")
 
@@ -789,7 +780,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
                 return
 
             orderid: str = d["clOrdId"]
-            order: OrderData = self.gateway.get_order(orderid)
+            order = self.gateway.get_order(orderid)
             if not order:
                 return
             order.status = Status.REJECTED
@@ -810,11 +801,11 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         # Failed to process
         data: list = packet["data"]
         for d in data:
-            code: str = d["sCode"]
+            code = d["sCode"]
             if code == "0":
                 return
 
-            msg: str = d["sMsg"]
+            msg = d["sMsg"]
             self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
 
     def login(self) -> None:
@@ -862,13 +853,13 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         # Check order type
         if req.type not in ORDERTYPE_VT2OKX:
             self.gateway.write_log(f"Send order failed, order type not supported: {req.type.value}")
-            return
+            return ""
 
         # Check symbol
         contract: ContractData = symbol_contract_map.get(req.symbol, None)
         if not contract:
             self.gateway.write_log(f"Send order failed, symbol not found: {req.symbol}")
-            return
+            return ""
 
         # Generate local orderid
         self.order_count += 1
@@ -901,7 +892,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         # Push submitting event
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.gateway.on_order(order)
-        return order.vt_orderid
+        return cast(str, order.vt_orderid)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """Cancel existing order"""
@@ -922,7 +913,7 @@ class OkxWebsocketPrivateApi(WebsocketClient):
         self.send_packet(okx_req)
 
 
-def generate_signature(msg: str, secret_key: str) -> bytes:
+def generate_signature(msg: str, secret_key: bytes) -> bytes:
     """Generate signature from message"""
     return base64.b64encode(hmac.new(secret_key, msg.encode(), hashlib.sha256).digest())
 
@@ -954,7 +945,7 @@ def parse_order_data(data: dict, gateway_name: str) -> OrderData:
     if order_id:
         local_orderids.add(order_id)
     else:
-        order_id: str = data["ordId"]
+        order_id = data["ordId"]
 
     order: OrderData = OrderData(
         symbol=data["instId"],
