@@ -39,7 +39,7 @@ from vnpy_websocket import WebsocketClient
 
 
 # UTC timezone
-UTC_TZ: ZoneInfo = ZoneInfo("UTC")
+CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 
 # Real server hosts
 REAL_REST_HOST: str = "https://www.okx.com"
@@ -585,14 +585,24 @@ class RestApi(RestClient):
                     base, quote, expiry = name.split("-")
                     symbol = base + quote + "_" + expiry + "_OKX"
 
+            if d["tickSz"]:
+                pricetick: float = float(d["tickSz"])
+            else:
+                pricetick = 0
+
+            if d["minSz"]:
+                min_volume: float = float(d["minSz"])
+            else:
+                min_volume = 0
+
             contract: ContractData = ContractData(
                 symbol=symbol,
                 exchange=Exchange.GLOBAL,
                 name=name,
                 product=product,
                 size=size,
-                pricetick=float(d["tickSz"]),
-                min_volume=float(d["minSz"]),
+                pricetick=pricetick,
+                min_volume=min_volume,
                 history_data=True,
                 net_position=net_position,
                 gateway_name=self.gateway_name,
@@ -811,7 +821,7 @@ class PublicApi(WebsocketClient):
             symbol=req.symbol,
             exchange=req.exchange,
             name=contract.name,
-            datetime=datetime.now(UTC_TZ),
+            datetime=datetime.now(CHINA_TZ),
             gateway_name=self.gateway_name,
         )
         self.ticks[contract.name] = tick
@@ -1469,7 +1479,7 @@ def parse_timestamp(timestamp: str) -> datetime:
         datetime: Datetime object with UTC timezone
     """
     dt: datetime = datetime.fromtimestamp(int(timestamp) / 1000)
-    return dt.replace(tzinfo=UTC_TZ)
+    return dt.replace(tzinfo=CHINA_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
