@@ -1,17 +1,19 @@
-from vnpy_evo.event import EventEngine
-from vnpy_evo.trader.engine import MainEngine
-from vnpy_evo.trader.ui import MainWindow, create_qapp
+from vnpy.event import EventEngine
+from vnpy.trader.engine import MainEngine
+from vnpy.trader.ui import MainWindow, create_qapp
 
 from vnpy_okx import OkxGateway
+from vnpy_datamanager import DataManagerApp
 
 
-def main():
-    """主入口函数"""
+def main() -> None:
+    """main entry"""
     qapp = create_qapp()
 
     event_engine = EventEngine()
     main_engine = MainEngine(event_engine)
     main_engine.add_gateway(OkxGateway)
+    main_engine.add_app(DataManagerApp)
 
     main_window = MainWindow(main_engine, event_engine)
     main_window.showMaximized()

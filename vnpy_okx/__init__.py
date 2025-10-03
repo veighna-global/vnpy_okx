@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 #
-# Copyright (c) 2023-present, VeighNa Global
+# Copyright (c) 2015-present, Xiaoyou Chen
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -23,4 +23,7 @@
 from .okx_gateway import OkxGateway
 
 
-__version__ = "2024.4.3"
+__version__ = "2025.06.17"
+
+
+__all__ = ["OkxGateway"]
