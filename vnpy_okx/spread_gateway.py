@@ -89,6 +89,14 @@ INTERVAL_VT2OKX: dict[Interval, str] = {
     Interval.DAILY: "1D",
 }
 
+# Product type map
+PRODUCT_OKX2VT: dict[str, Product] = {
+    "SWAP": Product.SWAP,
+    "SPOT": Product.SPOT,
+    "FUTURES": Product.FUTURES
+}
+PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
+
 
 class SpreadGateway(BaseGateway):
     """
@@ -133,7 +141,7 @@ class SpreadGateway(BaseGateway):
         self.name_contract_map: dict[str, ContractData] = {}
 
         self.rest_api: RestApi = RestApi(self)
-        self.public_api: PublicApi = PublicApi(self)
+        self.business_api: BusinessApi = BusinessApi(self)
         self.private_api: PrivateApi = PrivateApi(self)
 
     def connect(self, setting: dict) -> None:
@@ -167,7 +175,10 @@ class SpreadGateway(BaseGateway):
         """
         Connect to OKX websocket API.
         """
-        self.public_api.connect(
+        self.business_api.connect(
+            self.key,
+            self.secret,
+            self.passphrase,
             self.server,
             self.proxy_host,
             self.proxy_port,
@@ -188,7 +199,7 @@ class SpreadGateway(BaseGateway):
         Parameters:
             req: Subscription request object containing symbol information
         """
-        self.public_api.subscribe(req)
+        self.business_api.subscribe(req)
 
     def send_order(self, req: OrderRequest) -> str:
         """
@@ -203,7 +214,7 @@ class SpreadGateway(BaseGateway):
         Returns:
             str: The VeighNa order ID if successful, empty string otherwise
         """
-        return self.private_api.send_order(req)
+        return self.business_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """
@@ -215,7 +226,7 @@ class SpreadGateway(BaseGateway):
         Parameters:
             req: Cancel request object containing order details
         """
-        self.private_api.cancel_order(req)
+        self.business_api.cancel_order(req)
 
     def query_account(self) -> None:
         """
@@ -248,7 +259,7 @@ class SpreadGateway(BaseGateway):
         This method stops all API connections and releases resources.
         """
         self.rest_api.stop()
-        self.public_api.stop()
+        self.business_api.stop()
         self.private_api.stop()
 
     def on_order(self, order: OrderData) -> None:
@@ -703,8 +714,8 @@ class RestApi(RestClient):
         return history
 
 
-class PublicApi(WebsocketClient):
-    """The public websocket API of SpreadGateway"""
+class BusinessApi(WebsocketClient):
+    """The business websocket API of SpreadGateway"""
 
     def __init__(self, gateway: SpreadGateway) -> None:
         """
@@ -718,16 +729,36 @@ class PublicApi(WebsocketClient):
         self.gateway: SpreadGateway = gateway
         self.gateway_name: str = gateway.gateway_name
 
+        self.local_orderids: set[str] = gateway.local_orderids
         self.subscribed: dict[str, SubscribeRequest] = {}
         self.ticks: dict[str, TickData] = {}
 
+        self.key: str = ""
+        self.secret: bytes = b""
+        self.passphrase: str = ""
+
+        self.reqid: int = 0
+        self.order_count: int = 0
+        self.connect_time: int = 0
+
         self.callbacks: dict[str, Callable] = {
+            "login": self.on_login,
+            "sprd-orders": self.on_order,
+            "sprd-trades": self.on_trade,
             "sprd-tickers": self.on_ticker,
-            "sprd-books5": self.on_depth
+            "sprd-books5": self.on_depth,
+            "order": self.on_send_order,
+            "cancel-order": self.on_cancel_order,
+            "error": self.on_api_error
         }
+
+        self.reqid_order_map: dict[str, OrderData] = {}
 
     def connect(
         self,
+        key: str,
+        secret: str,
+        passphrase: str,
         server: str,
         proxy_host: str,
         proxy_port: int,
@@ -735,13 +766,22 @@ class PublicApi(WebsocketClient):
         """
         Start server connection.
 
-        This method establishes a websocket connection to OKX public data stream.
+        This method establishes a websocket connection to OKX private data stream.
 
         Parameters:
+            key: API Key for authentication
+            secret: API Secret for request signing
+            passphrase: API Passphrase for authentication
             server: Server type ("REAL", "AWS", or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
         """
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
+
         server_hosts: dict[str, str] = {
             "REAL": REAL_BUSINESS_HOST,
             "AWS": AWS_BUSINESS_HOST,
@@ -802,214 +842,23 @@ class PublicApi(WebsocketClient):
 
         This function is called when the websocket connection to the server
         is successfully established. It logs the connection status and
-        resubscribes to previously subscribed market data channels.
+        initiates the login process.
         """
-        self.gateway.write_log("Public API connected")
+        self.gateway.write_log("Business websocket API connected")
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
-    def on_disconnected(self) -> None:
-        """
-        Callback when server is disconnected.
-
-        This function is called when the websocket connection is closed.
-        It logs the disconnection status.
-        """
-        self.gateway.write_log("Public API disconnected")
-
-    def on_packet(self, packet: dict) -> None:
-        """
-        Callback of data update.
-
-        This function processes different types of market data updates,
-        including ticker and depth data. It routes the data to the
-        appropriate callback function based on the channel.
-
-        Parameters:
-            packet: JSON data received from websocket
-        """
-        if "event" in packet:
-            event: str = packet["event"]
-            if event == "subscribe":
-                return
-            elif event == "error":
-                code: str = packet["code"]
-                msg: str = packet["msg"]
-                self.gateway.write_log(f"Public API request failed, status code: {code}, message: {msg}")
-        else:
-            channel: str = packet["arg"]["channel"]
-            callback: Callable | None = self.callbacks.get(channel, None)
-
-            if callback:
-                callback(packet)
-
-    def on_error(self, exc: type, value: Exception, tb: TracebackType) -> None:
-        """
-        General error callback.
-
-        This function is called when an exception occurs in the websocket connection.
-        It logs the exception details for troubleshooting.
-
-        Parameters:
-            exc: Type of the exception
-            value: Exception instance
-            tb: Traceback object
-        """
-        detail: str = self.exception_detail(exc, value, tb)
-
-        msg: str = f"Exception catched by Public API: {detail}"
-        self.gateway.write_log(msg)
-
-    def on_ticker(self, packet: dict) -> None:
-        """
-        Callback of ticker update.
-
-        This function processes the ticker data updates and
-        updates the corresponding TickData objects.
-
-        Parameters:
-            data: Ticker data from websocket
-        """
-        for d in packet["data"]:
-            tick: TickData = self.ticks[d["sprdId"]]
-
-            tick.last_price = float(d["last"])
-            tick.last_volume = float(d["lastSz"])
-            tick.open_price = float(d["open24h"])
-            tick.high_price = float(d["high24h"])
-            tick.low_price = float(d["low24h"])
-            tick.volume = float(d["vol24h"])
-            tick.datetime = parse_timestamp(d["ts"])
-
-            self.gateway.on_tick(copy(tick))
-
-    def on_depth(self, packet: dict) -> None:
-        """
-        Callback of depth update.
-
-        This function processes the order book depth data updates
-        and updates the corresponding TickData objects.
-
-        Parameters:
-            data: Depth data from websocket
-        """
-        name: str = packet["arg"]["sprdId"]
-        tick: TickData = self.ticks[name]
-
-        for d in packet["data"]:
-            bids: list = d["bids"]
-            asks: list = d["asks"]
-
-            for n in range(min(5, len(bids))):
-                price, volume, _, _ = bids[n]
-                tick.__setattr__("bid_price_%s" % (n + 1), float(price))
-                tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
-
-            for n in range(min(5, len(asks))):
-                price, volume, _, _ = asks[n]
-                tick.__setattr__("ask_price_%s" % (n + 1), float(price))
-                tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
-
-            tick.datetime = parse_timestamp(d["ts"])
-            self.gateway.on_tick(copy(tick))
-
-
-class PrivateApi(WebsocketClient):
-    """The private websocket API of SpreadGateway"""
-
-    def __init__(self, gateway: SpreadGateway) -> None:
-        """
-        The init method of the api.
-
-        Parameters:
-            gateway: the parent gateway object for pushing callback data.
-        """
-        super().__init__()
-
-        self.gateway: SpreadGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
-        self.local_orderids: set[str] = gateway.local_orderids
-
-        self.key: str = ""
-        self.secret: bytes = b""
-        self.passphrase: str = ""
-
-        self.reqid: int = 0
-        self.order_count: int = 0
-        self.connect_time: int = 0
-
-        self.callbacks: dict[str, Callable] = {
-            "login": self.on_login,
-            "sprd-orders": self.on_order,
-            "sprd-trades": self.on_trade,
-            "account": self.on_account,
-            "positions": self.on_position,
-            "order": self.on_send_order,
-            "cancel-order": self.on_cancel_order,
-            "error": self.on_api_error
-        }
-
-        self.reqid_order_map: dict[str, OrderData] = {}
-
-    def connect(
-        self,
-        key: str,
-        secret: str,
-        passphrase: str,
-        server: str,
-        proxy_host: str,
-        proxy_port: int,
-    ) -> None:
-        """
-        Start server connection.
-
-        This method establishes a websocket connection to OKX private data stream.
-
-        Parameters:
-            key: API Key for authentication
-            secret: API Secret for request signing
-            passphrase: API Passphrase for authentication
-            server: Server type ("REAL", "AWS", or "DEMO")
-            proxy_host: Proxy server hostname or IP
-            proxy_port: Proxy server port
-        """
-        self.key = key
-        self.secret = secret.encode()
-        self.passphrase = passphrase
-
-        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
-
-        server_hosts: dict[str, str] = {
-            "REAL": REAL_PRIVATE_HOST,
-            "AWS": AWS_PRIVATE_HOST,
-            "DEMO": DEMO_PRIVATE_HOST,
-        }
-
-        host: str = server_hosts[server]
-        self.init(host, proxy_host, proxy_port, 20)
-
-        self.start()
-
-    def on_connected(self) -> None:
-        """
-        Callback when server is connected.
-
-        This function is called when the websocket connection to the server
-        is successfully established. It logs the connection status and
-        initiates the login process.
-        """
-        self.gateway.write_log("Private websocket API connected")
         self.login()
 
-    def on_disconnected(self) -> None:
+    def on_disconnected(self, code: int, msg: str) -> None:
         """
         Callback when server is disconnected.
 
         This function is called when the websocket connection is closed.
         It logs the disconnection status.
         """
-        self.gateway.write_log("Private API disconnected")
+        self.gateway.write_log(f"Business API disconnected, code: {code}, msg: {msg}")
 
     def on_packet(self, packet: dict) -> None:
         """
@@ -1043,7 +892,7 @@ class PrivateApi(WebsocketClient):
         Parameters:
             e: The exception that was raised
         """
-        msg: str = f"Private channel exception triggered: {e}"
+        msg: str = f"Business channel exception triggered: {e}"
         self.gateway.write_log(msg)
 
     def on_api_error(self, packet: dict) -> None:
@@ -1061,7 +910,7 @@ class PrivateApi(WebsocketClient):
         msg: str = packet["msg"]
 
         # Log the error with details for debugging
-        self.gateway.write_log(f"Private API request failed, status code: {code}, message: {msg}")
+        self.gateway.write_log(f"Business API request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """
@@ -1074,10 +923,10 @@ class PrivateApi(WebsocketClient):
             packet: Login response data from websocket
         """
         if packet["code"] == '0':
-            self.gateway.write_log("Private API login successful")
+            self.gateway.write_log("Business API login successful")
             self.subscribe_topic()
         else:
-            self.gateway.write_log("Private API login failed")
+            self.gateway.write_log("Business API login failed")
 
     def on_order(self, packet: dict) -> None:
         """
@@ -1136,60 +985,6 @@ class PrivateApi(WebsocketClient):
                 gateway_name=self.gateway_name,
             )
             self.gateway.on_trade(trade)
-
-    def on_account(self, packet: dict) -> None:
-        """
-        Callback of account balance update.
-
-        This function processes account balance updates and creates
-        AccountData objects for each asset.
-
-        Parameters:
-            packet: Account update data from websocket
-        """
-        if len(packet["data"]) == 0:
-            return
-
-        buf: dict = packet["data"][0]
-        for detail in buf["details"]:
-            account: AccountData = AccountData(
-                accountid=detail["ccy"],
-                balance=float(detail["eq"]),
-                gateway_name=self.gateway_name,
-            )
-            account.available = float(detail["availEq"]) if len(detail["availEq"]) != 0 else 0.0
-            account.frozen = account.balance - account.available
-            self.gateway.on_account(account)
-
-    def on_position(self, packet: dict) -> None:
-        """
-        Callback of position update.
-
-        This function processes position updates and creates
-        PositionData objects for each position.
-
-        Parameters:
-            packet: Position update data from websocket
-        """
-        data: list = packet["data"]
-        for d in data:
-            name: str = d["instId"]
-            contract: ContractData = self.gateway.get_contract_by_name(name)
-
-            pos: float = float(d["pos"])
-            price: float = get_float_value(d, "avgPx")
-            pnl: float = get_float_value(d, "upl")
-
-            position: PositionData = PositionData(
-                symbol=contract.symbol,
-                exchange=Exchange.GLOBAL,
-                direction=Direction.NET,
-                volume=pos,
-                price=price,
-                pnl=pnl,
-                gateway_name=self.gateway_name,
-            )
-            self.gateway.on_position(position)
 
     def on_send_order(self, packet: dict) -> None:
         """
@@ -1257,6 +1052,59 @@ class PrivateApi(WebsocketClient):
             msg = d["sMsg"]
             self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
 
+    def on_ticker(self, packet: dict) -> None:
+        """
+        Callback of ticker update.
+
+        This function processes the ticker data updates and
+        updates the corresponding TickData objects.
+
+        Parameters:
+            data: Ticker data from websocket
+        """
+        for d in packet["data"]:
+            tick: TickData = self.ticks[d["sprdId"]]
+
+            tick.last_price = float(d["last"])
+            tick.last_volume = float(d["lastSz"])
+            tick.open_price = float(d["open24h"])
+            tick.high_price = float(d["high24h"])
+            tick.low_price = float(d["low24h"])
+            tick.volume = float(d["vol24h"])
+            tick.datetime = parse_timestamp(d["ts"])
+
+            self.gateway.on_tick(copy(tick))
+
+    def on_depth(self, packet: dict) -> None:
+        """
+        Callback of depth update.
+
+        This function processes the order book depth data updates
+        and updates the corresponding TickData objects.
+
+        Parameters:
+            data: Depth data from websocket
+        """
+        name: str = packet["arg"]["sprdId"]
+        tick: TickData = self.ticks[name]
+
+        for d in packet["data"]:
+            bids: list = d["bids"]
+            asks: list = d["asks"]
+
+            for n in range(min(5, len(bids))):
+                price, volume, _, _ = bids[n]
+                tick.__setattr__("bid_price_%s" % (n + 1), float(price))
+                tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
+
+            for n in range(min(5, len(asks))):
+                price, volume, _, _ = asks[n]
+                tick.__setattr__("ask_price_%s" % (n + 1), float(price))
+                tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
+
+            tick.datetime = parse_timestamp(d["ts"])
+            self.gateway.on_tick(copy(tick))
+
     def login(self) -> None:
         """
         User login.
@@ -1297,14 +1145,7 @@ class PrivateApi(WebsocketClient):
                 },
                 {
                     "channel": "sprd-trades"
-                },
-                {
-                    "channel": "account"
-                },
-                {
-                    "channel": "positions",
-                    "instType": "ANY"
-                },
+                }
             ]
         }
         self.send_packet(packet)
@@ -1401,6 +1242,281 @@ class PrivateApi(WebsocketClient):
         }
 
         # Send the cancellation request
+        self.send_packet(packet)
+
+
+class PrivateApi(WebsocketClient):
+    """The private websocket API of SpreadGateway"""
+
+    def __init__(self, gateway: SpreadGateway) -> None:
+        """
+        The init method of the api.
+
+        Parameters:
+            gateway: the parent gateway object for pushing callback data.
+        """
+        super().__init__()
+
+        self.gateway: SpreadGateway = gateway
+        self.gateway_name: str = gateway.gateway_name
+        self.local_orderids: set[str] = gateway.local_orderids
+
+        self.key: str = ""
+        self.secret: bytes = b""
+        self.passphrase: str = ""
+
+        self.reqid: int = 0
+        self.order_count: int = 0
+        self.connect_time: int = 0
+
+        self.callbacks: dict[str, Callable] = {
+            "login": self.on_login,
+            "account": self.on_account,
+            "positions": self.on_position,
+            "error": self.on_api_error
+        }
+
+        self.reqid_order_map: dict[str, OrderData] = {}
+
+    def connect(
+        self,
+        key: str,
+        secret: str,
+        passphrase: str,
+        server: str,
+        proxy_host: str,
+        proxy_port: int,
+    ) -> None:
+        """
+        Start server connection.
+
+        This method establishes a websocket connection to OKX private data stream.
+
+        Parameters:
+            key: API Key for authentication
+            secret: API Secret for request signing
+            passphrase: API Passphrase for authentication
+            server: Server type ("REAL", "AWS", or "DEMO")
+            proxy_host: Proxy server hostname or IP
+            proxy_port: Proxy server port
+        """
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
+
+        server_hosts: dict[str, str] = {
+            "REAL": REAL_PRIVATE_HOST,
+            "AWS": AWS_PRIVATE_HOST,
+            "DEMO": DEMO_PRIVATE_HOST,
+        }
+
+        host: str = server_hosts[server]
+        self.init(host, proxy_host, proxy_port, 20)
+
+        self.start()
+
+    def on_connected(self) -> None:
+        """
+        Callback when server is connected.
+
+        This function is called when the websocket connection to the server
+        is successfully established. It logs the connection status and
+        initiates the login process.
+        """
+        self.gateway.write_log("Private websocket API connected")
+        self.login()
+
+    def on_disconnected(self, code: int, msg: str) -> None:
+        """
+        Callback when server is disconnected.
+
+        This function is called when the websocket connection is closed.
+        It logs the disconnection status.
+        """
+        self.gateway.write_log(f"Private API disconnected, code: {code}, msg: {msg}")
+
+    def on_packet(self, packet: dict) -> None:
+        """
+        Callback of data update.
+
+        This function processes different types of private data updates,
+        including orders, account balance, and positions. It routes the data
+        to the appropriate callback function.
+
+        Parameters:
+            packet: JSON data received from websocket
+        """
+        if "event" in packet:
+            cb_name: str = packet["event"]
+        elif "op" in packet:
+            cb_name = packet["op"]
+        else:
+            cb_name = packet["arg"]["channel"]
+
+        callback: Callable | None = self.callbacks.get(cb_name, None)
+        if callback:
+            callback(packet)
+
+    def on_error(self, e: Exception) -> None:
+        """
+        General error callback.
+
+        This function is called when an exception occurs in the websocket connection.
+        It logs the exception details for troubleshooting.
+
+        Parameters:
+            e: The exception that was raised
+        """
+        msg: str = f"Private channel exception triggered: {e}"
+        self.gateway.write_log(msg)
+
+    def on_api_error(self, packet: dict) -> None:
+        """
+        Callback of API error.
+
+        This function processes error responses from the websocket API.
+        It logs the error details for troubleshooting.
+
+        Parameters:
+            packet: Error data from websocket
+        """
+        # Extract error code and message from the response
+        code: str = packet["code"]
+        msg: str = packet["msg"]
+
+        # Log the error with details for debugging
+        self.gateway.write_log(f"Private API request failed, status code: {code}, message: {msg}")
+
+    def on_login(self, packet: dict) -> None:
+        """
+        Callback of user login.
+
+        This function processes the login response and subscribes to
+        private data channels if login is successful.
+
+        Parameters:
+            packet: Login response data from websocket
+        """
+        if packet["code"] == '0':
+            self.gateway.write_log("Private API login successful")
+            self.subscribe_topic()
+        else:
+            self.gateway.write_log("Private API login failed")
+
+    def on_account(self, packet: dict) -> None:
+        """
+        Callback of account balance update.
+
+        This function processes account balance updates and creates
+        AccountData objects for each asset.
+
+        Parameters:
+            packet: Account update data from websocket
+        """
+        if len(packet["data"]) == 0:
+            return
+
+        buf: dict = packet["data"][0]
+        for detail in buf["details"]:
+            account: AccountData = AccountData(
+                accountid=detail["ccy"],
+                balance=float(detail["eq"]),
+                gateway_name=self.gateway_name,
+            )
+            account.available = float(detail["availEq"]) if len(detail["availEq"]) != 0 else 0.0
+            account.frozen = account.balance - account.available
+            self.gateway.on_account(account)
+
+    def on_position(self, packet: dict) -> None:
+        """
+        Callback of position update.
+
+        This function processes position updates and creates
+        PositionData objects for each position.
+
+        Parameters:
+            packet: Position update data from websocket
+        """
+        try:
+            data: list = packet["data"]
+            for d in data:
+                name: str = d["instId"]
+
+                product: Product = PRODUCT_OKX2VT[d["instType"]]
+                match product:
+                    case Product.SPOT:
+                        symbol: str = name.replace("-", "") + "_SPOT_OKX"
+                    case Product.SWAP:
+                        base, quote, _ = name.split("-")
+                        symbol = base + quote + "_SWAP_OKX"
+                    case Product.FUTURES:
+                        base, quote, expiry = name.split("-")
+                        symbol = base + quote + "_" + expiry + "_OKX"
+
+                pos: float = float(d["pos"])
+                price: float = get_float_value(d, "avgPx")
+                pnl: float = get_float_value(d, "upl")
+
+                position: PositionData = PositionData(
+                    symbol=symbol,
+                    exchange=Exchange.GLOBAL,
+                    direction=Direction.NET,
+                    volume=pos,
+                    price=price,
+                    pnl=pnl,
+                    gateway_name=self.gateway_name,
+                )
+                self.gateway.on_position(position)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+    def login(self) -> None:
+        """
+        User login.
+
+        This function prepares and sends a login request to authenticate
+        with the websocket API using API credentials.
+        """
+        timestamp: str = str(time.time())
+        msg: str = timestamp + "GET" + "/users/self/verify"
+        signature: bytes = generate_signature(msg, self.secret)
+
+        packet: dict = {
+            "op": "login",
+            "args":
+            [
+                {
+                    "apiKey": self.key,
+                    "passphrase": self.passphrase,
+                    "timestamp": timestamp,
+                    "sign": signature.decode("utf-8")
+                }
+            ]
+        }
+        self.send_packet(packet)
+
+    def subscribe_topic(self) -> None:
+        """
+        Subscribe to private data channels.
+
+        This function sends subscription requests for order, account, and
+        position updates after successful login.
+        """
+        packet: dict = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "account"
+                },
+                {
+                    "channel": "positions",
+                    "instType": "ANY"
+                },
+            ]
+        }
         self.send_packet(packet)
 
 
