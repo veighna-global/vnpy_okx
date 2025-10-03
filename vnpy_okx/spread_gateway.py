@@ -495,6 +495,9 @@ class RestApi(RestClient):
         This function sends a request to get all active orders
         that have not been fully filled or cancelled.
         """
+        if not self.key:
+            return
+
         self.add_request(
             "GET",
             "/api/v5/sprd/orders-pending",
@@ -827,13 +830,14 @@ class BusinessApi(WebsocketClient):
         for channel in ["sprd-tickers", "sprd-books5"]:
             args.append({
                 "channel": channel,
-                "instId": contract.name
+                "sprdId": contract.name
             })
 
         packet: dict = {
             "op": "subscribe",
             "args": args
         }
+
         self.send_packet(packet)
 
     def on_connected(self) -> None:
@@ -881,6 +885,8 @@ class BusinessApi(WebsocketClient):
         callback: Callable | None = self.callbacks.get(cb_name, None)
         if callback:
             callback(packet)
+        else:
+            print(packet)
 
     def on_error(self, e: Exception) -> None:
         """
@@ -1063,6 +1069,9 @@ class BusinessApi(WebsocketClient):
             data: Ticker data from websocket
         """
         for d in packet["data"]:
+            if not d["last"]:
+                return
+
             tick: TickData = self.ticks[d["sprdId"]]
 
             tick.last_price = float(d["last"])
@@ -1093,12 +1102,12 @@ class BusinessApi(WebsocketClient):
             asks: list = d["asks"]
 
             for n in range(min(5, len(bids))):
-                price, volume, _, _ = bids[n]
+                price, volume, _ = bids[n]
                 tick.__setattr__("bid_price_%s" % (n + 1), float(price))
                 tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
 
             for n in range(min(5, len(asks))):
-                price, volume, _, _ = asks[n]
+                price, volume, _ = asks[n]
                 tick.__setattr__("ask_price_%s" % (n + 1), float(price))
                 tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
 
@@ -1112,6 +1121,9 @@ class BusinessApi(WebsocketClient):
         This function prepares and sends a login request to authenticate
         with the websocket API using API credentials.
         """
+        if not self.key:
+            return
+
         timestamp: str = str(time.time())
         msg: str = timestamp + "GET" + "/users/self/verify"
         signature: bytes = generate_signature(msg, self.secret)
@@ -1237,7 +1249,7 @@ class BusinessApi(WebsocketClient):
         self.reqid += 1
         packet: dict = {
             "id": str(self.reqid),
-            "op": "cancel-order",
+            "op": "sprd-cancel-order",
             "args": [arg]
         }
 
