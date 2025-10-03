@@ -55,9 +55,9 @@ AWS_BUSINESS_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/business"
 
 # Demo server hosts
 DEMO_REST_HOST: str = "https://www.okx.com"
-DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
-DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
-DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999"
+DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public"
+DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private"
+DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business"
 
 # Order status map
 STATUS_OKX2VT: dict[str, Status] = {
@@ -70,7 +70,7 @@ STATUS_OKX2VT: dict[str, Status] = {
 
 # Order type map
 ORDERTYPE_OKX2VT: dict[str, OrderType] = {
-    "market": OrderType.MARKET,    # 2024-07-29 金泽宽修改
+    "market": OrderType.MARKET,
     "limit": OrderType.LIMIT,
     "fok": OrderType.FOK,
     "ioc": OrderType.FAK
@@ -83,13 +83,6 @@ DIRECTION_OKX2VT: dict[str, Direction] = {
     "sell": Direction.SHORT
 }
 DIRECTION_VT2OKX: dict[Direction, str] = {v: k for k, v in DIRECTION_OKX2VT.items()}
-
-# Posside map        # 2024-07-29 金泽宽修改
-POSSIDE_OKX2VT: dict[str, Direction] = {
-    "long": Direction.LONG,
-    "short": Direction.SHORT
-}
-POSSIDE_VT2OKX: dict[Direction, str] = {v: k for k, v in POSSIDE_OKX2VT.items()}
 
 # Kline interval map
 INTERVAL_VT2OKX: dict[Interval, str] = {
@@ -1374,7 +1367,6 @@ class PrivateApi(WebsocketClient):
             "clOrdId": orderid,
             "side": DIRECTION_VT2OKX[req.direction],
             "ordType": ORDERTYPE_VT2OKX[req.type],
-            "posSide": POSSIDE_VT2OKX[req.direction],    # 2024-07-29 金泽宽修改
             "px": str(req.price),
             "sz": str(req.volume)
         }
