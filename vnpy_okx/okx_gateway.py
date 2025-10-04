@@ -1921,35 +1921,33 @@ class BusinessApi(WebsocketClient):
         """
         # Extract trade data from packet
         for d in packet["data"]:
-            name: str = d["sprdId"]
-            symbol: str = f"{name}_OKX"
-
-            # Round trade volume number to meet minimum volume precision
-            trade_volume: float = float(d["fillSz"])
-
-            contract: ContractData = self.gateway.get_contract_by_name(name)
-            if contract:
-                trade_volume = round_to(trade_volume, contract.min_volume)
-
             # Get order id
             if d["clOrdId"]:
                 order_id: str = d["clOrdId"]
             else:
                 order_id = d["ordId"]
 
-            # Create trade object and push to gateway
-            trade: TradeData = TradeData(
-                symbol=symbol,
-                exchange=Exchange.GLOBAL,
-                orderid=order_id,
-                tradeid=d["tradeId"],
-                direction=DIRECTION_OKX2VT[d["side"]],
-                price=float(d["fillPx"]),
-                volume=float(d["fillSz"]),
-                datetime=parse_timestamp(d["ts"]),
-                gateway_name=self.gateway_name,
-            )
-            self.gateway.on_trade(trade)
+            dt: datetime = parse_timestamp(d["ts"])
+
+            for leg in d["legs"]:
+                name: str = leg["instId"]
+                contract: ContractData | None = self.gateway.get_contract_by_name(name)
+                if not contract:
+                    self.write_log(f"Failed to parse trade data, contract not found: {name}")
+                    continue
+
+                trade: TradeData = TradeData(
+                    symbol=contract.symbol,
+                    exchange=Exchange.GLOBAL,
+                    orderid=order_id,
+                    tradeid=leg["tradeId"],
+                    direction=DIRECTION_OKX2VT[leg["side"]],
+                    price=float(leg["px"]),
+                    volume=float(leg["sz"]),
+                    datetime=dt,
+                    gateway_name=self.gateway_name,
+                )
+                self.gateway.on_trade(trade)
 
     def on_send_order(self, packet: dict) -> None:
         """
