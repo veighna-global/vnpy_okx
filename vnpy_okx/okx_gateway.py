@@ -1075,12 +1075,11 @@ class WebsocketApi(WebsocketClient):
         if callback:
             callback(packet)
 
-    def on_error(self, exc: type, value: Exception, tb: TracebackType) -> None:
+    def on_error(self, value: Exception) -> None:
         """
         General error callback.
         """
-        detail: str = self.exception_detail(exc, value, tb)
-        self.gateway.write_log(f"Exception catched by {self.name}: {detail}")
+        self.gateway.write_log(f"Exception catched by {self.name}: {value}")
 
     def send_ping(self) -> None:
         """Send heartbeat ping to server"""
