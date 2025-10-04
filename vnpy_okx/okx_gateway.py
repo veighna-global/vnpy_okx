@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from types import TracebackType
 from collections.abc import Callable
 
-from vnpy.event import EventEngine
+from vnpy.event import EventEngine, Event, EVENT_TIMER
 from vnpy.trader.constant import (
     Direction,
     Exchange,
@@ -116,6 +116,7 @@ class OkxGateway(BaseGateway):
         "Server": ["REAL", "AWS", "DEMO"],
         "Proxy Host": "",
         "Proxy Port": 0,
+        "Spread Trading": ["False", "True"],
     }
 
     exchanges: Exchange = [Exchange.GLOBAL]
@@ -135,6 +136,7 @@ class OkxGateway(BaseGateway):
         self.server: str = ""
         self.proxy_host: str = ""
         self.proxy_port: int = 0
+        self.spread_trading: bool = False
 
         self.orders: dict[str, OrderData] = {}
         self.local_orderids: set[str] = set()
@@ -145,6 +147,10 @@ class OkxGateway(BaseGateway):
         self.rest_api: RestApi = RestApi(self)
         self.public_api: PublicApi = PublicApi(self)
         self.private_api: PrivateApi = PrivateApi(self)
+        self.business_api: BusinessApi = BusinessApi(self)
+
+        self.ping_count: int = 0
+        self.ping_interval: int = 20
 
     def connect(self, setting: dict) -> None:
         """
@@ -163,6 +169,7 @@ class OkxGateway(BaseGateway):
         self.server = setting["Server"]
         self.proxy_host = setting["Proxy Host"]
         self.proxy_port = setting["Proxy Port"]
+        self.spread_trading = setting["Spread Trading"] == "True"
 
         self.rest_api.connect(
             self.key,
@@ -170,7 +177,8 @@ class OkxGateway(BaseGateway):
             self.passphrase,
             self.server,
             self.proxy_host,
-            self.proxy_port
+            self.proxy_port,
+            self.spread_trading
         )
 
     def connect_ws_api(self) -> None:
@@ -191,6 +199,18 @@ class OkxGateway(BaseGateway):
             self.proxy_port,
         )
 
+        if self.spread_trading:
+            self.business_api.connect(
+                self.key,
+                self.secret,
+                self.passphrase,
+                self.server,
+                self.proxy_host,
+                self.proxy_port,
+            )
+
+        self.event_engine.register(EVENT_TIMER, self.process_timer_event)
+
     def subscribe(self, req: SubscribeRequest) -> None:
         """
         Subscribe to market data.
@@ -198,7 +218,15 @@ class OkxGateway(BaseGateway):
         Parameters:
             req: Subscription request object containing symbol information
         """
-        self.public_api.subscribe(req)
+        contract: ContractData | None = self.symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.write_log(f"Failed to subscribe data, symbol not found: {req.symbol}")
+            return
+
+        if contract.product == Product.SPREAD:
+            self.business_api.subscribe(req)
+        else:
+            self.public_api.subscribe(req)
 
     def send_order(self, req: OrderRequest) -> str:
         """
@@ -213,7 +241,15 @@ class OkxGateway(BaseGateway):
         Returns:
             str: The VeighNa order ID if successful, empty string otherwise
         """
-        return self.private_api.send_order(req)
+        contract: ContractData | None = self.symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.write_log(f"Failed to send order, symbol not found: {req.symbol}")
+            return ""
+
+        if contract.product == Product.SPREAD:
+            return self.business_api.send_order(req)
+        else:
+            return self.private_api.send_order(req)
 
     def cancel_order(self, req: CancelRequest) -> None:
         """
@@ -225,7 +261,15 @@ class OkxGateway(BaseGateway):
         Parameters:
             req: Cancel request object containing order details
         """
-        self.private_api.cancel_order(req)
+        contract: ContractData | None = self.symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.write_log(f"Failed to cancel order, symbol not found: {req.symbol}")
+            return
+
+        if contract.product == Product.SPREAD:
+            self.business_api.cancel_order(req)
+        else:
+            self.private_api.cancel_order(req)
 
     def query_account(self) -> None:
         """
@@ -357,6 +401,57 @@ class OkxGateway(BaseGateway):
         )
         return order
 
+    def parse_spread_order_data(self, data: dict, gateway_name: str) -> OrderData:
+        """
+        Parse dict to spread order data.
+
+        This function converts OKX order data into a VeighNa OrderData object.
+        It extracts and maps all relevant fields from the exchange response.
+
+        Parameters:
+            data: Order data from OKX
+            gateway_name: Gateway name for identification
+
+        Returns:
+            OrderData: VeighNa order object
+        """
+        contract: ContractData = self.get_contract_by_name(data["sprdId"])
+
+        order_id: str = data["clOrdId"]
+        if order_id:
+            self.local_orderids.add(order_id)
+        else:
+            order_id = data["ordId"]
+
+        order: OrderData = OrderData(
+            symbol=contract.symbol,
+            exchange=Exchange.GLOBAL,
+            type=ORDERTYPE_OKX2VT[data["ordType"]],
+            orderid=order_id,
+            direction=DIRECTION_OKX2VT[data["side"]],
+            offset=Offset.NONE,
+            traded=float(data["accFillSz"]),
+            price=float(data["px"]),
+            volume=float(data["sz"]),
+            datetime=parse_timestamp(data["cTime"]),
+            status=STATUS_OKX2VT[data["state"]],
+            gateway_name=gateway_name,
+        )
+        return order
+
+    def process_timer_event(self, event: Event) -> None:
+        """
+        Process timer event.
+        """
+        self.ping_count += 1
+        if self.ping_count < self.ping_interval:
+            return
+        self.ping_count = 0
+
+        self.private_api.send_ping()
+        self.public_api.send_ping()
+        self.business_api.send_ping()
+
 
 class RestApi(RestClient):
     """The REST API of OkxGateway"""
@@ -435,6 +530,7 @@ class RestApi(RestClient):
         server: str,
         proxy_host: str,
         proxy_port: int,
+        spread_trading: bool
     ) -> None:
         """
         Start server connection.
@@ -449,6 +545,7 @@ class RestApi(RestClient):
             server: Server type ("REAL", "AWS", or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
+            spread_trading: Whether to enable spread trading
         """
         self.key = key
         self.secret = secret.encode()
@@ -473,6 +570,9 @@ class RestApi(RestClient):
 
         self.query_time()
         self.query_contract()
+
+        if spread_trading:
+            self.query_spread()
 
     def query_time(self) -> None:
         """
@@ -514,6 +614,34 @@ class RestApi(RestClient):
                 callback=self.on_query_contract,
                 params={"instType": inst_type}
             )
+
+    def query_spread(self) -> None:
+        """
+        Query available spreads.
+
+        This function sends a request to get all available spread contracts.
+        """
+        self.add_request(
+            "GET",
+            "/api/v5/sprd/spreads",
+            callback=self.on_query_spread
+        )
+
+    def query_spread_order(self) -> None:
+        """
+        Query open spread orders.
+
+        This function sends a request to get all active orders
+        that have not been fully filled or cancelled.
+        """
+        if not self.key:
+            return
+
+        self.add_request(
+            "GET",
+            "/api/v5/sprd/orders-pending",
+            callback=self.on_query_spread_order,
+        )
 
     def on_query_time(self, packet: dict, request: Request) -> None:
         """
@@ -620,6 +748,62 @@ class RestApi(RestClient):
             self.query_order()
 
             self.gateway.connect_ws_api()
+
+    def on_query_spread(self, packet: dict, request: Request) -> None:
+        """
+        Callback of available contracts query.
+
+        This function processes the exchange info response and
+        creates ContractData objects for each spread contract.
+
+        Parameters:
+            packet: Response data from the server
+            request: Original request object
+        """
+        data: list = packet["data"]
+
+        for d in data:
+            name: str = d["sprdId"]
+            symbol: str = name + "_OKX"
+
+            contract: ContractData = ContractData(
+                symbol=symbol,
+                exchange=Exchange.GLOBAL,
+                name=name,
+                product=Product.SPREAD,
+                size=float(d["lotSz"]),
+                pricetick=float(d["tickSz"]),
+                min_volume=float(d["minSz"]),
+                history_data=True,
+                net_position=True,
+                gateway_name=self.gateway_name,
+            )
+
+            self.gateway.on_contract(contract)
+
+        self.gateway.write_log("Spread contract data received")
+
+        self.query_spread_order()
+
+    def on_query_spread_order(self, packet: dict, request: Request) -> None:
+        """
+        Callback of open spread orders query.
+
+        This function processes the open orders response and
+        creates OrderData objects for each active spread order.
+
+        Parameters:
+            packet: Response data from the server
+            request: Original request object
+        """
+        for order_info in packet["data"]:
+            order: OrderData = self.gateway.parse_spread_order_data(
+                order_info,
+                self.gateway_name
+            )
+            self.gateway.on_order(order)
+
+        self.gateway.write_log("Spread order data received")
 
     def on_error(
         self,
@@ -771,6 +955,8 @@ class PublicApi(WebsocketClient):
             "books5": self.on_depth
         }
 
+        self.connected: bool = False
+
     def connect(
         self,
         server: str,
@@ -849,6 +1035,7 @@ class PublicApi(WebsocketClient):
         is successfully established. It logs the connection status and
         resubscribes to previously subscribed market data channels.
         """
+        self.connected = True
         self.gateway.write_log("Public API connected")
 
         for req in list(self.subscribed.values()):
@@ -861,7 +1048,20 @@ class PublicApi(WebsocketClient):
         This function is called when the websocket connection is closed.
         It logs the disconnection status.
         """
+        self.connected = False
         self.gateway.write_log("Public API disconnected")
+
+    def on_message(self, message: str) -> None:
+        """
+        Callback when websocket app receives new message.
+
+        Parameters:
+            message: The message received from websocket app
+        """
+        if message == "pong":
+            return
+
+        self.on_packet(json.loads(message))
 
     def on_packet(self, packet: dict) -> None:
         """
@@ -958,6 +1158,11 @@ class PublicApi(WebsocketClient):
             tick.datetime = parse_timestamp(d["ts"])
             self.gateway.on_tick(copy(tick))
 
+    def send_ping(self) -> None:
+        """Send heartbeat ping to server"""
+        if self.connected:
+            self.wsapp.send("ping")
+
 
 class PrivateApi(WebsocketClient):
     """The private websocket API of OkxGateway"""
@@ -994,6 +1199,8 @@ class PrivateApi(WebsocketClient):
         }
 
         self.reqid_order_map: dict[str, OrderData] = {}
+
+        self.connected: bool = False
 
     def connect(
         self,
@@ -1042,6 +1249,7 @@ class PrivateApi(WebsocketClient):
         is successfully established. It logs the connection status and
         initiates the login process.
         """
+        self.connected = True
         self.gateway.write_log("Private websocket API connected")
         self.login()
 
@@ -1052,7 +1260,20 @@ class PrivateApi(WebsocketClient):
         This function is called when the websocket connection is closed.
         It logs the disconnection status.
         """
+        self.connected = False
         self.gateway.write_log("Private API disconnected")
+
+    def on_message(self, message: str) -> None:
+        """
+        Callback when websocket app receives new message.
+
+        Parameters:
+            message: The message received from websocket app
+        """
+        if message == "pong":
+            return
+
+        self.on_packet(json.loads(message))
 
     def on_packet(self, packet: dict) -> None:
         """
@@ -1432,6 +1653,572 @@ class PrivateApi(WebsocketClient):
 
         # Send the cancellation request
         self.send_packet(packet)
+
+    def send_ping(self) -> None:
+        """Send heartbeat ping to server"""
+        if self.connected:
+            self.wsapp.send("ping")
+
+
+class BusinessApi(WebsocketClient):
+    """The business websocket API of OkxGateway"""
+
+    def __init__(self, gateway: OkxGateway) -> None:
+        """
+        The init method of the api.
+
+        Parameters:
+            gateway: the parent gateway object for pushing callback data.
+        """
+        super().__init__()
+
+        self.gateway: OkxGateway = gateway
+        self.gateway_name: str = gateway.gateway_name
+
+        self.local_orderids: set[str] = gateway.local_orderids
+        self.subscribed: dict[str, SubscribeRequest] = {}
+        self.ticks: dict[str, TickData] = {}
+
+        self.key: str = ""
+        self.secret: bytes = b""
+        self.passphrase: str = ""
+
+        self.reqid: int = 0
+        self.order_count: int = 0
+        self.connect_time: int = 0
+
+        self.callbacks: dict[str, Callable] = {
+            "login": self.on_login,
+            "sprd-orders": self.on_order,
+            "sprd-trades": self.on_trade,
+            "sprd-tickers": self.on_ticker,
+            "sprd-books5": self.on_depth,
+            "order": self.on_send_order,
+            "cancel-order": self.on_cancel_order,
+            "error": self.on_api_error
+        }
+
+        self.reqid_order_map: dict[str, OrderData] = {}
+
+        self.connected: bool = False
+
+    def connect(
+        self,
+        key: str,
+        secret: str,
+        passphrase: str,
+        server: str,
+        proxy_host: str,
+        proxy_port: int,
+    ) -> None:
+        """
+        Start server connection.
+
+        This method establishes a websocket connection to OKX private data stream.
+
+        Parameters:
+            key: API Key for authentication
+            secret: API Secret for request signing
+            passphrase: API Passphrase for authentication
+            server: Server type ("REAL", "AWS", or "DEMO")
+            proxy_host: Proxy server hostname or IP
+            proxy_port: Proxy server port
+        """
+        self.key = key
+        self.secret = secret.encode()
+        self.passphrase = passphrase
+
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
+
+        server_hosts: dict[str, str] = {
+            "REAL": REAL_BUSINESS_HOST,
+            "AWS": AWS_BUSINESS_HOST,
+            "DEMO": DEMO_BUSINESS_HOST,
+        }
+
+        host: str = server_hosts[server]
+        self.init(host, proxy_host, proxy_port, 20)
+
+        self.start()
+
+    def subscribe(self, req: SubscribeRequest) -> None:
+        """
+        Subscribe to market data.
+
+        This function sends subscription requests for ticker and depth data
+        for the specified trading instrument.
+
+        Parameters:
+            req: Subscription request object containing symbol information
+        """
+        # Get contract by VeighNa symbol
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Failed to subscribe data, symbol not found: {req.symbol}")
+            return
+
+        # Add subscribe record
+        self.subscribed[req.vt_symbol] = req
+
+        # Create tick object
+        tick: TickData = TickData(
+            symbol=req.symbol,
+            exchange=req.exchange,
+            name=contract.name,
+            datetime=datetime.now(CHINA_TZ),
+            gateway_name=self.gateway_name,
+        )
+        self.ticks[contract.name] = tick
+
+        # Send request to subscribe
+        args: list = []
+        for channel in ["sprd-tickers", "sprd-books5"]:
+            args.append({
+                "channel": channel,
+                "sprdId": contract.name
+            })
+
+        packet: dict = {
+            "op": "subscribe",
+            "args": args
+        }
+
+        self.send_packet(packet)
+
+    def on_connected(self) -> None:
+        """
+        Callback when server is connected.
+
+        This function is called when the websocket connection to the server
+        is successfully established. It logs the connection status and
+        initiates the login process.
+        """
+        self.connected = True
+        self.gateway.write_log("Business websocket API connected")
+
+        for req in list(self.subscribed.values()):
+            self.subscribe(req)
+
+        self.login()
+
+    def on_disconnected(self, code: int, msg: str) -> None:
+        """
+        Callback when server is disconnected.
+
+        This function is called when the websocket connection is closed.
+        It logs the disconnection status.
+        """
+        self.connected = False
+        self.gateway.write_log(f"Business API disconnected, code: {code}, msg: {msg}")
+
+    def on_message(self, message: str) -> None:
+        """
+        Callback when websocket app receives new message.
+
+        Parameters:
+            message: The message received from websocket app
+        """
+        if message == "pong":
+            return
+
+        self.on_packet(json.loads(message))
+
+    def on_packet(self, packet: dict) -> None:
+        """
+        Callback of data update.
+
+        This function processes different types of private data updates,
+        including orders, account balance, and positions. It routes the data
+        to the appropriate callback function.
+
+        Parameters:
+            packet: JSON data received from websocket
+        """
+        if "event" in packet:
+            cb_name: str = packet["event"]
+        elif "op" in packet:
+            cb_name = packet["op"]
+        else:
+            cb_name = packet["arg"]["channel"]
+
+        callback: Callable | None = self.callbacks.get(cb_name, None)
+        if callback:
+            callback(packet)
+        else:
+            print(packet)
+
+    def on_error(self, e: Exception) -> None:
+        """
+        General error callback.
+
+        This function is called when an exception occurs in the websocket connection.
+        It logs the exception details for troubleshooting.
+
+        Parameters:
+            e: The exception that was raised
+        """
+        msg: str = f"Business channel exception triggered: {e}"
+        self.gateway.write_log(msg)
+
+    def on_api_error(self, packet: dict) -> None:
+        """
+        Callback of API error.
+
+        This function processes error responses from the websocket API.
+        It logs the error details for troubleshooting.
+
+        Parameters:
+            packet: Error data from websocket
+        """
+        # Extract error code and message from the response
+        code: str = packet["code"]
+        msg: str = packet["msg"]
+
+        # Log the error with details for debugging
+        self.gateway.write_log(f"Business API request failed, status code: {code}, message: {msg}")
+
+    def on_login(self, packet: dict) -> None:
+        """
+        Callback of user login.
+
+        This function processes the login response and subscribes to
+        private data channels if login is successful.
+
+        Parameters:
+            packet: Login response data from websocket
+        """
+        if packet["code"] == '0':
+            self.gateway.write_log("Business API login successful")
+            self.subscribe_topic()
+        else:
+            self.gateway.write_log("Business API login failed")
+
+    def on_order(self, packet: dict) -> None:
+        """
+        Callback of order update.
+
+        This function processes order updates and trade executions.
+        It creates OrderData and TradeData objects and pushes them to the gateway.
+
+        Parameters:
+            packet: Order update data from websocket
+        """
+        # Extract order data from packet
+        data: list = packet["data"]
+        for d in data:
+            # Create order object from data
+            order: OrderData = self.gateway.parse_spread_order_data(d, self.gateway_name)
+            self.gateway.on_order(order)
+
+    def on_trade(self, packet: dict) -> None:
+        """
+        Callback of trade update.
+
+        This function processes trade updates and creates TradeData objects.
+
+        Parameters:
+            packet: Order update data from websocket
+        """
+        # Extract trade data from packet
+        for d in packet["data"]:
+            name: str = d["sprdId"]
+            symbol: str = f"{name}_OKX"
+
+            # Round trade volume number to meet minimum volume precision
+            trade_volume: float = float(d["fillSz"])
+
+            contract: ContractData = self.gateway.get_contract_by_name(name)
+            if contract:
+                trade_volume = round_to(trade_volume, contract.min_volume)
+
+            # Get order id
+            if d["clOrdId"]:
+                order_id: str = d["clOrdId"]
+            else:
+                order_id = d["ordId"]
+
+            # Create trade object and push to gateway
+            trade: TradeData = TradeData(
+                symbol=symbol,
+                exchange=Exchange.GLOBAL,
+                orderid=order_id,
+                tradeid=d["tradeId"],
+                direction=DIRECTION_OKX2VT[d["side"]],
+                price=float(d["fillPx"]),
+                volume=float(d["fillSz"]),
+                datetime=parse_timestamp(d["ts"]),
+                gateway_name=self.gateway_name,
+            )
+            self.gateway.on_trade(trade)
+
+    def on_send_order(self, packet: dict) -> None:
+        """
+        Callback of send_order.
+
+        This function processes the response to an order placement request.
+        It handles errors and rejection cases.
+
+        Parameters:
+            packet: Order response data from websocket
+        """
+        data: list = packet["data"]
+
+        # Wrong parameters
+        if packet["code"] != "0":
+            if not data:
+                order: OrderData | None = self.reqid_order_map.get(packet["id"], None)
+                if order:
+                    order.status = Status.REJECTED
+                    self.gateway.on_order(order)
+
+                return
+
+        # Failed to process
+        for d in data:
+            code: str = d["sCode"]
+            if code == "0":
+                return
+
+            orderid: str = d["clOrdId"]
+            order = self.gateway.get_order(orderid)
+            if not order:
+                return
+
+            order.status = Status.REJECTED
+            self.gateway.on_order(copy(order))
+
+            msg: str = d["sMsg"]
+            self.gateway.write_log(f"Send order failed, status code: {code}, message: {msg}")
+
+    def on_cancel_order(self, packet: dict) -> None:
+        """
+        Callback of cancel_order.
+
+        This function processes the response to an order cancellation request.
+        It handles errors and logs appropriate messages.
+
+        Parameters:
+            packet: Cancel response data from websocket
+        """
+        # Wrong parameters
+        if packet["code"] != "0":
+            code: str = packet["code"]
+            msg: str = packet["msg"]
+            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
+            return
+
+        # Failed to process
+        data: list = packet["data"]
+        for d in data:
+            code = d["sCode"]
+            if code == "0":
+                return
+
+            msg = d["sMsg"]
+            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
+
+    def on_ticker(self, packet: dict) -> None:
+        """
+        Callback of ticker update.
+
+        This function processes the ticker data updates and
+        updates the corresponding TickData objects.
+
+        Parameters:
+            data: Ticker data from websocket
+        """
+        for d in packet["data"]:
+            if not d["last"]:
+                return
+
+            tick: TickData = self.ticks[d["sprdId"]]
+
+            tick.last_price = float(d["last"])
+            tick.last_volume = float(d["lastSz"])
+            tick.open_price = float(d["open24h"])
+            tick.high_price = float(d["high24h"])
+            tick.low_price = float(d["low24h"])
+            tick.volume = float(d["vol24h"])
+            tick.datetime = parse_timestamp(d["ts"])
+
+            self.gateway.on_tick(copy(tick))
+
+    def on_depth(self, packet: dict) -> None:
+        """
+        Callback of depth update.
+
+        This function processes the order book depth data updates
+        and updates the corresponding TickData objects.
+
+        Parameters:
+            data: Depth data from websocket
+        """
+        name: str = packet["arg"]["sprdId"]
+        tick: TickData = self.ticks[name]
+
+        for d in packet["data"]:
+            bids: list = d["bids"]
+            asks: list = d["asks"]
+
+            for n in range(min(5, len(bids))):
+                price, volume, _ = bids[n]
+                tick.__setattr__("bid_price_%s" % (n + 1), float(price))
+                tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
+
+            for n in range(min(5, len(asks))):
+                price, volume, _ = asks[n]
+                tick.__setattr__("ask_price_%s" % (n + 1), float(price))
+                tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
+
+            tick.datetime = parse_timestamp(d["ts"])
+            self.gateway.on_tick(copy(tick))
+
+    def login(self) -> None:
+        """
+        User login.
+
+        This function prepares and sends a login request to authenticate
+        with the websocket API using API credentials.
+        """
+        if not self.key:
+            return
+
+        timestamp: str = str(time.time())
+        msg: str = timestamp + "GET" + "/users/self/verify"
+        signature: bytes = generate_signature(msg, self.secret)
+
+        packet: dict = {
+            "op": "login",
+            "args":
+            [
+                {
+                    "apiKey": self.key,
+                    "passphrase": self.passphrase,
+                    "timestamp": timestamp,
+                    "sign": signature.decode("utf-8")
+                }
+            ]
+        }
+        self.send_packet(packet)
+
+    def subscribe_topic(self) -> None:
+        """
+        Subscribe to private data channels.
+
+        This function sends subscription requests for order, account, and
+        position updates after successful login.
+        """
+        packet: dict = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "sprd-orders"
+                },
+                {
+                    "channel": "sprd-trades"
+                }
+            ]
+        }
+        self.send_packet(packet)
+
+    def send_order(self, req: OrderRequest) -> str:
+        """
+        Send new order to OKX.
+
+        This function creates and sends a new order request to the exchange.
+        It handles different order types and trading modes.
+
+        Parameters:
+            req: Order request object containing order details
+
+        Returns:
+            str: The VeighNa order ID if successful, empty string otherwise
+        """
+        # Validate order type is supported by OKX
+        if req.type not in ORDERTYPE_VT2OKX:
+            self.gateway.write_log(f"Send order failed, order type not supported: {req.type.value}")
+            return ""
+
+        # Validate symbol exists in contract map
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Send order failed, symbol not found: {req.symbol}")
+            return ""
+
+        # Generate unique local order ID
+        self.order_count += 1
+        count_str = str(self.order_count).rjust(6, "0")
+        orderid = f"{self.connect_time}{count_str}"
+
+        # Prepare order parameters for OKX API
+        arg: dict = {
+            "sprdId": contract.name,
+            "clOrdId": orderid,
+            "side": DIRECTION_VT2OKX[req.direction],
+            "ordType": ORDERTYPE_VT2OKX[req.type],
+            "px": str(req.price),
+            "sz": str(req.volume)
+        }
+
+        # Create websocket request with unique request ID
+        self.reqid += 1
+        packet: dict = {
+            "id": str(self.reqid),
+            "op": "sprd-order",
+            "args": [arg]
+        }
+        self.send_packet(packet)
+
+        # Create order data object and push to gateway
+        order: OrderData = req.create_order_data(orderid, self.gateway_name)
+        self.gateway.on_order(order)
+
+        # Return VeighNa order ID (gateway_name.orderid)
+        return str(order.vt_orderid)
+
+    def cancel_order(self, req: CancelRequest) -> None:
+        """
+        Cancel existing order on OKX.
+
+        This function sends a request to cancel an existing order on the exchange.
+        It determines whether to use client order ID or exchange order ID.
+
+        Parameters:
+            req: Cancel request object containing order details
+        """
+        # Validate symbol exists in contract map
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Cancel order failed, symbol not found: {req.symbol}")
+            return
+
+        # Initialize cancel parameters
+        arg: dict = {}
+
+        # Determine the type of order ID to use for cancellation
+        # OKX supports both client order ID and exchange order ID for cancellation
+        if req.orderid in self.local_orderids:
+            # Use client order ID if it was created by this gateway instance
+            arg["clOrdId"] = req.orderid
+        else:
+            # Use exchange order ID if it came from another source
+            arg["ordId"] = req.orderid
+
+        # Create websocket request with unique request ID
+        self.reqid += 1
+        packet: dict = {
+            "id": str(self.reqid),
+            "op": "sprd-cancel-order",
+            "args": [arg]
+        }
+
+        # Send the cancellation request
+        self.send_packet(packet)
+
+    def send_ping(self) -> None:
+        """Send heartbeat ping to server"""
+        if self.connected:
+            self.wsapp.send("ping")
 
 
 def generate_signature(msg: str, secret_key: bytes) -> bytes:
