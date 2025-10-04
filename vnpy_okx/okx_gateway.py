@@ -1050,7 +1050,89 @@ class RestApi(RestClient):
         return history
 
 
-class PublicApi(WebsocketClient):
+class WebsocketApi(WebsocketClient):
+    """The base websocket API of OkxGateway"""
+
+    def __init__(self, gateway: OkxGateway, name: str) -> None:
+        """
+        The init method of the api.
+        """
+        super().__init__()
+
+        self.name: str = name
+        self.gateway: OkxGateway = gateway
+        self.gateway_name: str = gateway.gateway_name
+
+        self.connected: bool = False
+        self.callbacks: dict[str, Callable] = {}
+        self.server_hosts: dict[str, str] = {}
+
+    def connect_(
+        self,
+        server: str,
+        proxy_host: str,
+        proxy_port: int,
+    ) -> None:
+        """
+        Start server connection.
+        """
+        host: str = self.server_hosts[server]
+        self.init(host, proxy_host, proxy_port, 20)
+        self.start()
+
+    def on_connected(self) -> None:
+        """
+        Callback when server is connected.
+        """
+        self.connected = True
+        self.gateway.write_log(f"{self.name} connected")
+
+    def on_disconnected(self) -> None:
+        """
+        Callback when server is disconnected.
+        """
+        self.connected = False
+        self.gateway.write_log(f"{self.name} disconnected")
+
+    def on_message(self, message: str) -> None:
+        """
+        Callback when websocket app receives new message.
+        """
+        if message == "pong":
+            return
+        self.on_packet(json.loads(message))
+
+    def on_packet(self, packet: dict) -> None:
+        """
+        Callback of data update.
+        """
+        if "event" in packet:
+            cb_name: str = packet["event"]
+        elif "op" in packet:
+            cb_name = packet["op"]
+        elif "arg" in packet and "channel" in packet["arg"]:
+            cb_name = packet["arg"]["channel"]
+        else:
+            return
+
+        callback: Callable | None = self.callbacks.get(cb_name, None)
+        if callback:
+            callback(packet)
+
+    def on_error(self, exc: type, value: Exception, tb: TracebackType) -> None:
+        """
+        General error callback.
+        """
+        detail: str = self.exception_detail(exc, value, tb)
+        self.gateway.write_log(f"Exception catched by {self.name}: {detail}")
+
+    def send_ping(self) -> None:
+        """Send heartbeat ping to server"""
+        if self.connected:
+            self.wsapp.send("ping")
+
+
+class PublicApi(WebsocketApi):
     """The public websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
@@ -1060,47 +1142,28 @@ class PublicApi(WebsocketClient):
         Parameters:
             gateway: the parent gateway object for pushing callback data.
         """
-        super().__init__()
-
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        super().__init__(gateway, "Public API")
 
         self.subscribed: dict[str, SubscribeRequest] = {}
         self.ticks: dict[str, TickData] = {}
 
         self.callbacks: dict[str, Callable] = {
             "tickers": self.on_ticker,
-            "books5": self.on_depth
+            "books5": self.on_depth,
+            "error": self.on_api_error
         }
 
-        self.connected: bool = False
-
-    def connect(
-        self,
-        server: str,
-        proxy_host: str,
-        proxy_port: int,
-    ) -> None:
-        """
-        Start server connection.
-
-        This method establishes a websocket connection to OKX public data stream.
-
-        Parameters:
-            server: Server type ("REAL", "AWS", or "DEMO")
-            proxy_host: Proxy server hostname or IP
-            proxy_port: Proxy server port
-        """
-        server_hosts: dict[str, str] = {
+        self.server_hosts: dict[str, str] = {
             "REAL": REAL_PUBLIC_HOST,
             "AWS": AWS_PUBLIC_HOST,
             "DEMO": DEMO_PUBLIC_HOST,
         }
 
-        host: str = server_hosts[server]
-        self.init(host, proxy_host, proxy_port, 20)
-
-        self.start()
+    def connect(self, server: str, proxy_host: str, proxy_port: int) -> None:
+        """
+        Start server connection.
+        """
+        self.connect_(server, proxy_host, proxy_port)
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """
@@ -1153,79 +1216,20 @@ class PublicApi(WebsocketClient):
         is successfully established. It logs the connection status and
         resubscribes to previously subscribed market data channels.
         """
-        self.connected = True
-        self.gateway.write_log("Public API connected")
+        super().on_connected()
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
-    def on_disconnected(self) -> None:
+    def on_api_error(self, packet: dict) -> None:
         """
-        Callback when server is disconnected.
-
-        This function is called when the websocket connection is closed.
-        It logs the disconnection status.
+        Callback of API error.
         """
-        self.connected = False
-        self.gateway.write_log("Public API disconnected")
+        code: str = packet["code"]
+        msg: str = packet["msg"]
+        self.gateway.write_log(f"Public API request failed, status code: {code}, message: {msg}")
 
-    def on_message(self, message: str) -> None:
-        """
-        Callback when websocket app receives new message.
-
-        Parameters:
-            message: The message received from websocket app
-        """
-        if message == "pong":
-            return
-
-        self.on_packet(json.loads(message))
-
-    def on_packet(self, packet: dict) -> None:
-        """
-        Callback of data update.
-
-        This function processes different types of market data updates,
-        including ticker and depth data. It routes the data to the
-        appropriate callback function based on the channel.
-
-        Parameters:
-            packet: JSON data received from websocket
-        """
-        if "event" in packet:
-            event: str = packet["event"]
-            if event == "subscribe":
-                return
-            elif event == "error":
-                code: str = packet["code"]
-                msg: str = packet["msg"]
-                self.gateway.write_log(f"Public API request failed, status code: {code}, message: {msg}")
-        else:
-            channel: str = packet["arg"]["channel"]
-            callback: Callable | None = self.callbacks.get(channel, None)
-
-            if callback:
-                data: list = packet["data"]
-                callback(data)
-
-    def on_error(self, exc: type, value: Exception, tb: TracebackType) -> None:
-        """
-        General error callback.
-
-        This function is called when an exception occurs in the websocket connection.
-        It logs the exception details for troubleshooting.
-
-        Parameters:
-            exc: Type of the exception
-            value: Exception instance
-            tb: Traceback object
-        """
-        detail: str = self.exception_detail(exc, value, tb)
-
-        msg: str = f"Exception catched by Public API: {detail}"
-        self.gateway.write_log(msg)
-
-    def on_ticker(self, data: list) -> None:
+    def on_ticker(self, packet: dict) -> None:
         """
         Callback of ticker update.
 
@@ -1233,9 +1237,9 @@ class PublicApi(WebsocketClient):
         updates the corresponding TickData objects.
 
         Parameters:
-            data: Ticker data from websocket
+            packet: Ticker data from websocket
         """
-        for d in data:
+        for d in packet["data"]:
             tick: TickData = self.ticks[d["instId"]]
 
             tick.last_price = float(d["last"])
@@ -1248,7 +1252,7 @@ class PublicApi(WebsocketClient):
             tick.datetime = parse_timestamp(d["ts"])
             self.gateway.on_tick(copy(tick))
 
-    def on_depth(self, data: list) -> None:
+    def on_depth(self, packet: dict) -> None:
         """
         Callback of depth update.
 
@@ -1256,9 +1260,9 @@ class PublicApi(WebsocketClient):
         and updates the corresponding TickData objects.
 
         Parameters:
-            data: Depth data from websocket
+            packet: Depth data from websocket
         """
-        for d in data:
+        for d in packet["data"]:
             tick: TickData = self.ticks[d["instId"]]
             bids: list = d["bids"]
             asks: list = d["asks"]
@@ -1276,13 +1280,8 @@ class PublicApi(WebsocketClient):
             tick.datetime = parse_timestamp(d["ts"])
             self.gateway.on_tick(copy(tick))
 
-    def send_ping(self) -> None:
-        """Send heartbeat ping to server"""
-        if self.connected:
-            self.wsapp.send("ping")
 
-
-class PrivateApi(WebsocketClient):
+class PrivateApi(WebsocketApi):
     """The private websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
@@ -1292,10 +1291,8 @@ class PrivateApi(WebsocketClient):
         Parameters:
             gateway: the parent gateway object for pushing callback data.
         """
-        super().__init__()
+        super().__init__(gateway, "Private API")
 
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
         self.local_orderids: set[str] = gateway.local_orderids
 
         self.key: str = ""
@@ -1316,9 +1313,13 @@ class PrivateApi(WebsocketClient):
             "error": self.on_api_error
         }
 
-        self.reqid_order_map: dict[str, OrderData] = {}
+        self.server_hosts: dict[str, str] = {
+            "REAL": REAL_PRIVATE_HOST,
+            "AWS": AWS_PRIVATE_HOST,
+            "DEMO": DEMO_PRIVATE_HOST,
+        }
 
-        self.connected: bool = False
+        self.reqid_order_map: dict[str, OrderData] = {}
 
     def connect(
         self,
@@ -1348,16 +1349,7 @@ class PrivateApi(WebsocketClient):
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
-        server_hosts: dict[str, str] = {
-            "REAL": REAL_PRIVATE_HOST,
-            "AWS": AWS_PRIVATE_HOST,
-            "DEMO": DEMO_PRIVATE_HOST,
-        }
-
-        host: str = server_hosts[server]
-        self.init(host, proxy_host, proxy_port, 20)
-
-        self.start()
+        self.connect_(server, proxy_host, proxy_port)
 
     def on_connected(self) -> None:
         """
@@ -1367,66 +1359,8 @@ class PrivateApi(WebsocketClient):
         is successfully established. It logs the connection status and
         initiates the login process.
         """
-        self.connected = True
-        self.gateway.write_log("Private websocket API connected")
+        super().on_connected()
         self.login()
-
-    def on_disconnected(self) -> None:
-        """
-        Callback when server is disconnected.
-
-        This function is called when the websocket connection is closed.
-        It logs the disconnection status.
-        """
-        self.connected = False
-        self.gateway.write_log("Private API disconnected")
-
-    def on_message(self, message: str) -> None:
-        """
-        Callback when websocket app receives new message.
-
-        Parameters:
-            message: The message received from websocket app
-        """
-        if message == "pong":
-            return
-
-        self.on_packet(json.loads(message))
-
-    def on_packet(self, packet: dict) -> None:
-        """
-        Callback of data update.
-
-        This function processes different types of private data updates,
-        including orders, account balance, and positions. It routes the data
-        to the appropriate callback function.
-
-        Parameters:
-            packet: JSON data received from websocket
-        """
-        if "event" in packet:
-            cb_name: str = packet["event"]
-        elif "op" in packet:
-            cb_name = packet["op"]
-        else:
-            cb_name = packet["arg"]["channel"]
-
-        callback: Callable | None = self.callbacks.get(cb_name, None)
-        if callback:
-            callback(packet)
-
-    def on_error(self, e: Exception) -> None:
-        """
-        General error callback.
-
-        This function is called when an exception occurs in the websocket connection.
-        It logs the exception details for troubleshooting.
-
-        Parameters:
-            e: The exception that was raised
-        """
-        msg: str = f"Private channel exception triggered: {e}"
-        self.gateway.write_log(msg)
 
     def on_api_error(self, packet: dict) -> None:
         """
@@ -1772,13 +1706,8 @@ class PrivateApi(WebsocketClient):
         # Send the cancellation request
         self.send_packet(packet)
 
-    def send_ping(self) -> None:
-        """Send heartbeat ping to server"""
-        if self.connected:
-            self.wsapp.send("ping")
 
-
-class BusinessApi(WebsocketClient):
+class BusinessApi(WebsocketApi):
     """The business websocket API of OkxGateway"""
 
     def __init__(self, gateway: OkxGateway) -> None:
@@ -1788,10 +1717,7 @@ class BusinessApi(WebsocketClient):
         Parameters:
             gateway: the parent gateway object for pushing callback data.
         """
-        super().__init__()
-
-        self.gateway: OkxGateway = gateway
-        self.gateway_name: str = gateway.gateway_name
+        super().__init__(gateway, "Business API")
 
         self.local_orderids: set[str] = gateway.local_orderids
         self.subscribed: dict[str, SubscribeRequest] = {}
@@ -1816,9 +1742,13 @@ class BusinessApi(WebsocketClient):
             "error": self.on_api_error
         }
 
-        self.reqid_order_map: dict[str, OrderData] = {}
+        self.server_hosts: dict[str, str] = {
+            "REAL": REAL_BUSINESS_HOST,
+            "AWS": AWS_BUSINESS_HOST,
+            "DEMO": DEMO_BUSINESS_HOST,
+        }
 
-        self.connected: bool = False
+        self.reqid_order_map: dict[str, OrderData] = {}
 
     def connect(
         self,
@@ -1848,16 +1778,7 @@ class BusinessApi(WebsocketClient):
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
-        server_hosts: dict[str, str] = {
-            "REAL": REAL_BUSINESS_HOST,
-            "AWS": AWS_BUSINESS_HOST,
-            "DEMO": DEMO_BUSINESS_HOST,
-        }
-
-        host: str = server_hosts[server]
-        self.init(host, proxy_host, proxy_port, 20)
-
-        self.start()
+        self.connect_(server, proxy_host, proxy_port)
 
     def subscribe(self, req: SubscribeRequest) -> None:
         """
@@ -1911,72 +1832,12 @@ class BusinessApi(WebsocketClient):
         is successfully established. It logs the connection status and
         initiates the login process.
         """
-        self.connected = True
-        self.gateway.write_log("Business websocket API connected")
+        super().on_connected()
 
         for req in list(self.subscribed.values()):
             self.subscribe(req)
 
         self.login()
-
-    def on_disconnected(self, code: int, msg: str) -> None:
-        """
-        Callback when server is disconnected.
-
-        This function is called when the websocket connection is closed.
-        It logs the disconnection status.
-        """
-        self.connected = False
-        self.gateway.write_log(f"Business API disconnected, code: {code}, msg: {msg}")
-
-    def on_message(self, message: str) -> None:
-        """
-        Callback when websocket app receives new message.
-
-        Parameters:
-            message: The message received from websocket app
-        """
-        if message == "pong":
-            return
-
-        self.on_packet(json.loads(message))
-
-    def on_packet(self, packet: dict) -> None:
-        """
-        Callback of data update.
-
-        This function processes different types of private data updates,
-        including orders, account balance, and positions. It routes the data
-        to the appropriate callback function.
-
-        Parameters:
-            packet: JSON data received from websocket
-        """
-        if "event" in packet:
-            cb_name: str = packet["event"]
-        elif "op" in packet:
-            cb_name = packet["op"]
-        else:
-            cb_name = packet["arg"]["channel"]
-
-        callback: Callable | None = self.callbacks.get(cb_name, None)
-        if callback:
-            callback(packet)
-        else:
-            print(packet)
-
-    def on_error(self, e: Exception) -> None:
-        """
-        General error callback.
-
-        This function is called when an exception occurs in the websocket connection.
-        It logs the exception details for troubleshooting.
-
-        Parameters:
-            e: The exception that was raised
-        """
-        msg: str = f"Business channel exception triggered: {e}"
-        self.gateway.write_log(msg)
 
     def on_api_error(self, packet: dict) -> None:
         """
@@ -2051,7 +1912,7 @@ class BusinessApi(WebsocketClient):
                 name: str = leg["instId"]
                 contract: ContractData | None = self.gateway.get_contract_by_name(name)
                 if not contract:
-                    self.write_log(f"Failed to parse trade data, contract not found: {name}")
+                    self.gateway.write_log(f"Failed to parse trade data, contract not found: {name}")
                     continue
 
                 trade: TradeData = TradeData(
@@ -2330,11 +2191,6 @@ class BusinessApi(WebsocketClient):
 
         # Send the cancellation request
         self.send_packet(packet)
-
-    def send_ping(self) -> None:
-        """Send heartbeat ping to server"""
-        if self.connected:
-            self.wsapp.send("ping")
 
 
 def generate_signature(msg: str, secret_key: bytes) -> bytes:
