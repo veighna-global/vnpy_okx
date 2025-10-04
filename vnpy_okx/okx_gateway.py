@@ -161,7 +161,7 @@ class OkxGateway(BaseGateway):
 
         Parameters:
             setting: A dictionary containing connection parameters including
-                    API credentials, server selection, and proxy configuration
+                     API credentials, server selection, and proxy configuration.
         """
         self.key = setting["API Key"]
         self.secret = setting["Secret Key"]
@@ -273,13 +273,19 @@ class OkxGateway(BaseGateway):
 
     def query_account(self) -> None:
         """
-        Not required since OKX provides websocket update for account balances.
+        Query account balance.
+
+        This method is not implemented because OKX provides account balance
+        updates through the websocket API.
         """
         pass
 
     def query_position(self) -> None:
         """
-        Not required since OKX provides websocket update for positions.
+        Query asset positions.
+
+        This method is not implemented because OKX provides position updates
+        through the websocket API.
         """
         pass
 
@@ -312,10 +318,11 @@ class OkxGateway(BaseGateway):
         self.rest_api.stop()
         self.public_api.stop()
         self.private_api.stop()
+        self.business_api.stop()
 
     def on_order(self, order: OrderData) -> None:
         """
-        Save a copy of order and then push to event engine.
+        Cache order data and push an order event.
 
         Parameters:
             order: Order data object
@@ -337,7 +344,7 @@ class OkxGateway(BaseGateway):
 
     def on_contract(self, contract: ContractData) -> None:
         """
-        Save a copy of contract and then push to event engine.
+        Cache contract data and push a contract event.
 
         Parameters:
             contract: Contract data object
@@ -449,7 +456,7 @@ class OkxGateway(BaseGateway):
 
     def process_timer_event(self, event: Event) -> None:
         """
-        Process timer event.
+        Process timer events for sending heartbeat messages.
         """
         self.ping_count += 1
         if self.ping_count < self.ping_interval:
@@ -653,10 +660,11 @@ class RestApi(RestClient):
 
     def query_spread_history(self, req: HistoryRequest) -> list[BarData]:
         """
-        Query kline history data.
+        Query kline history data for spread contracts.
 
         This function sends requests to get historical kline data
-        for a specific trading instrument and time period.
+        for a specific spread contract and time period. It queries
+        data iteratively until the start time is reached.
 
         Parameters:
             req: History request object containing query parameters
@@ -943,7 +951,8 @@ class RestApi(RestClient):
         Query kline history data.
 
         This function sends requests to get historical kline data
-        for a specific trading instrument and time period.
+        for a specific trading instrument and time period. It queries
+        data iteratively until the start time is reached.
 
         Parameters:
             req: History request object containing query parameters
@@ -2132,7 +2141,7 @@ class BusinessApi(WebsocketClient):
         updates the corresponding TickData objects.
 
         Parameters:
-            data: Ticker data from websocket
+            packet: Ticker data from websocket
         """
         for d in packet["data"]:
             if not d["last"]:
@@ -2158,7 +2167,7 @@ class BusinessApi(WebsocketClient):
         and updates the corresponding TickData objects.
 
         Parameters:
-            data: Depth data from websocket
+            packet: Depth data from websocket
         """
         name: str = packet["arg"]["sprdId"]
         tick: TickData = self.ticks[name]
