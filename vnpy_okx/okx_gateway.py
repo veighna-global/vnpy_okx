@@ -658,108 +658,6 @@ class RestApi(RestClient):
             callback=self.on_query_spread_order,
         )
 
-    def query_spread_history(self, req: HistoryRequest) -> list[BarData]:
-        """
-        Query kline history data for spread contracts.
-
-        This function sends requests to get historical kline data
-        for a specific spread contract and time period. It queries
-        data iteratively until the start time is reached.
-
-        Parameters:
-            req: History request object containing query parameters
-
-        Returns:
-            list[BarData]: List of historical kline data bars
-        """
-        # Validate symbol exists in contract map
-        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
-        if not contract:
-            self.gateway.write_log(f"Query kline history failed, symbol not found: {req.symbol}")
-            return []
-
-        # Initialize buffer for storing bars
-        buf: dict[datetime, BarData] = {}
-
-        path: str = "/api/v5/market/sprd-history-candles"
-        limit: str = "100"
-
-        if not req.end:
-            req.end = datetime.now()
-
-        after: str = str(int(req.end.timestamp() * 1000))
-
-        # Loop until no more data or request fails
-        while True:
-            # Create query params
-            params: dict = {
-                "sprdId": contract.name,
-                "bar": INTERVAL_VT2OKX[req.interval],
-                "limit": limit,
-                "after": after
-            }
-
-            # Get response from server
-            resp: Response = self.request(
-                "GET",
-                path,
-                params=params
-            )
-
-            # Break loop if request is failed
-            if resp.status_code // 100 != 2:
-                log_msg: str = f"Query kline history failed, status code: {resp.status_code}, message: {resp.text}"
-                self.gateway.write_log(log_msg)
-                break
-            else:
-                data: dict = resp.json()
-                bar_data: list = data.get("data", None)
-
-                if not bar_data:
-                    msg: str = data["msg"]
-                    log_msg = f"No kline history data received, {msg}"
-                    break
-
-                for row in bar_data:
-                    ts, op, hp, lp, cp, volume, _ = row
-
-                    dt: datetime = parse_timestamp(ts)
-
-                    bar: BarData = BarData(
-                        symbol=req.symbol,
-                        exchange=req.exchange,
-                        datetime=dt,
-                        interval=req.interval,
-                        volume=float(volume),
-                        open_price=float(op),
-                        high_price=float(hp),
-                        low_price=float(lp),
-                        close_price=float(cp),
-                        gateway_name=self.gateway_name
-                    )
-                    buf[bar.datetime] = bar
-
-                begin: str = bar_data[-1][0]
-                begin_dt: datetime = parse_timestamp(begin)
-                end: str = bar_data[0][0]
-                end_dt: datetime = parse_timestamp(end)
-
-                log_msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {begin_dt} - {end_dt}"
-                self.gateway.write_log(log_msg)
-
-                # Break if all bars have been queried
-                if begin_dt <= req.start:
-                    break
-
-                # Update start time
-                after = begin
-
-        index: list[datetime] = list(buf.keys())
-        index.sort()
-
-        history: list[BarData] = [buf[i] for i in index]
-        return history
-
     def on_query_time(self, packet: dict, request: Request) -> None:
         """
         Callback of server time query.
@@ -811,6 +709,9 @@ class RestApi(RestClient):
         """
         data: list = packet["data"]
 
+        if not data:
+            return
+
         for d in data:
             name: str = d["instId"]
             product: Product = PRODUCT_OKX2VT[d["instType"]]
@@ -856,10 +757,11 @@ class RestApi(RestClient):
 
             self.gateway.on_contract(contract)
 
-        self.gateway.write_log(f"{d['instType']} contract data received")
+        inst_type: str = request.params["instType"]
+        self.gateway.write_log(f"{inst_type} contract data received")
 
         # Connect to websocket API after all contract data received
-        self.product_ready.add(contract.product)
+        self.product_ready.add(PRODUCT_OKX2VT[inst_type])
 
         if len(self.product_ready) == len(PRODUCT_OKX2VT):
             self.query_order()
@@ -946,19 +848,15 @@ class RestApi(RestClient):
         msg: str = f"Exception catched by REST API: {detail}"
         self.gateway.write_log(msg)
 
-    def query_history(self, req: HistoryRequest) -> list[BarData]:
+    def _query_history(
+        self,
+        req: HistoryRequest,
+        path: str,
+        id_key: str,
+        bar_parser: Callable[[list, HistoryRequest], BarData]
+    ) -> list[BarData]:
         """
-        Query kline history data.
-
-        This function sends requests to get historical kline data
-        for a specific trading instrument and time period. It queries
-        data iteratively until the start time is reached.
-
-        Parameters:
-            req: History request object containing query parameters
-
-        Returns:
-            list[BarData]: List of historical kline data bars
+        Generic helper to query kline history data.
         """
         # Validate symbol exists in contract map
         contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
@@ -968,8 +866,6 @@ class RestApi(RestClient):
 
         # Initialize buffer for storing bars
         buf: dict[datetime, BarData] = {}
-
-        path: str = "/api/v5/market/history-candles"
         limit: str = "100"
 
         if not req.end:
@@ -981,7 +877,7 @@ class RestApi(RestClient):
         while True:
             # Create query params
             params: dict = {
-                "instId": contract.name,
+                id_key: contract.name,
                 "bar": INTERVAL_VT2OKX[req.interval],
                 "limit": limit,
                 "after": after
@@ -1004,28 +900,13 @@ class RestApi(RestClient):
                 bar_data: list = data.get("data", None)
 
                 if not bar_data:
-                    msg: str = data["msg"]
+                    msg: str = data.get("msg", "No data returned.")
                     log_msg = f"No kline history data received, {msg}"
+                    self.gateway.write_log(log_msg)
                     break
 
                 for row in bar_data:
-                    ts, op, hp, lp, cp, volume, turnover, _, _ = row
-
-                    dt: datetime = parse_timestamp(ts)
-
-                    bar: BarData = BarData(
-                        symbol=req.symbol,
-                        exchange=req.exchange,
-                        datetime=dt,
-                        interval=req.interval,
-                        volume=float(volume),
-                        turnover=float(turnover),
-                        open_price=float(op),
-                        high_price=float(hp),
-                        low_price=float(lp),
-                        close_price=float(cp),
-                        gateway_name=self.gateway_name
-                    )
+                    bar: BarData = bar_parser(row, req)
                     buf[bar.datetime] = bar
 
                 begin: str = bar_data[-1][0]
@@ -1048,6 +929,81 @@ class RestApi(RestClient):
 
         history: list[BarData] = [buf[i] for i in index]
         return history
+
+    def query_history(self, req: HistoryRequest) -> list[BarData]:
+        """
+        Query kline history data.
+
+        This function sends requests to get historical kline data
+        for a specific trading instrument and time period. It queries
+        data iteratively until the start time is reached.
+
+        Parameters:
+            req: History request object containing query parameters
+
+        Returns:
+            list[BarData]: List of historical kline data bars
+        """
+        def parse_bar(row: list, req: HistoryRequest) -> BarData:
+            ts, op, hp, lp, cp, volume, turnover, _, _ = row
+            dt: datetime = parse_timestamp(ts)
+            return BarData(
+                symbol=req.symbol,
+                exchange=req.exchange,
+                datetime=dt,
+                interval=req.interval,
+                volume=float(volume),
+                turnover=float(turnover),
+                open_price=float(op),
+                high_price=float(hp),
+                low_price=float(lp),
+                close_price=float(cp),
+                gateway_name=self.gateway_name
+            )
+
+        return self._query_history(
+            req=req,
+            path="/api/v5/market/history-candles",
+            id_key="instId",
+            bar_parser=parse_bar
+        )
+
+    def query_spread_history(self, req: HistoryRequest) -> list[BarData]:
+        """
+        Query kline history data for spread contracts.
+
+        This function sends requests to get historical kline data
+        for a specific spread contract and time period. It queries
+        data iteratively until the start time is reached.
+
+        Parameters:
+            req: History request object containing query parameters
+
+        Returns:
+            list[BarData]: List of historical kline data bars
+        """
+        def parse_spread_bar(row: list, req: HistoryRequest) -> BarData:
+            ts, op, hp, lp, cp, volume, _ = row
+            dt: datetime = parse_timestamp(ts)
+            return BarData(
+                symbol=req.symbol,
+                exchange=req.exchange,
+                datetime=dt,
+                interval=req.interval,
+                volume=float(volume),
+                open_price=float(op),
+                high_price=float(hp),
+                low_price=float(lp),
+                close_price=float(cp),
+                gateway_name=self.gateway_name
+            )
+
+        return self._query_history(
+            req=req,
+            path="/api/v5/market/sprd-history-candles",
+            id_key="sprdId",
+            bar_parser=parse_spread_bar
+        )
 
 
 class WebsocketApi(WebsocketClient):
@@ -1227,7 +1183,7 @@ class PublicApi(WebsocketApi):
         """
         code: str = packet["code"]
         msg: str = packet["msg"]
-        self.gateway.write_log(f"Public API request failed, status code: {code}, message: {msg}")
+        self.gateway.write_log(f"{self.name} request failed, status code: {code}, message: {msg}")
 
     def on_ticker(self, packet: dict) -> None:
         """
@@ -1377,7 +1333,7 @@ class PrivateApi(WebsocketApi):
         msg: str = packet["msg"]
 
         # Log the error with details for debugging
-        self.gateway.write_log(f"Private API request failed, status code: {code}, message: {msg}")
+        self.gateway.write_log(f"{self.name} request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """
@@ -1390,10 +1346,10 @@ class PrivateApi(WebsocketApi):
             packet: Login response data from websocket
         """
         if packet["code"] == '0':
-            self.gateway.write_log("Private API login successful")
+            self.gateway.write_log(f"{self.name} login successful")
             self.subscribe_topic()
         else:
-            self.gateway.write_log("Private API login failed")
+            self.gateway.write_log(f"{self.name} login failed")
 
     def on_order(self, packet: dict) -> None:
         """
@@ -1562,6 +1518,9 @@ class PrivateApi(WebsocketApi):
         This function prepares and sends a login request to authenticate
         with the websocket API using API credentials.
         """
+        if not self.key:
+            return
+
         timestamp: str = str(time.time())
         msg: str = timestamp + "GET" + "/users/self/verify"
         signature: bytes = generate_signature(msg, self.secret)
@@ -1635,7 +1594,7 @@ class PrivateApi(WebsocketApi):
         orderid = f"{self.connect_time}{count_str}"
 
         # Prepare order parameters for OKX API
-        args: dict = {
+        arg: dict = {
             "instId": contract.name,
             "clOrdId": orderid,
             "side": DIRECTION_VT2OKX[req.direction],
@@ -1647,16 +1606,16 @@ class PrivateApi(WebsocketApi):
         # Set trading mode based on product type
         # "cash" for spot trading, "cross" for futures/swap with cross margin
         if contract.product == Product.SPOT:
-            args["tdMode"] = "cash"
+            arg["tdMode"] = "cash"
         else:
-            args["tdMode"] = "cross"
+            arg["tdMode"] = "cross"
 
         # Create websocket request with unique request ID
         self.reqid += 1
         packet: dict = {
             "id": str(self.reqid),
             "op": "order",
-            "args": [args]
+            "args": [arg]
         }
         self.send_packet(packet)
 
@@ -1683,24 +1642,24 @@ class PrivateApi(WebsocketApi):
             self.gateway.write_log(f"Cancel order failed, symbol not found: {req.symbol}")
             return
 
-        # Initialize cancel parameters with instrument ID
-        args: dict = {"instId": contract.name}
+        # Initialize cancel parameters
+        arg: dict = {}
 
         # Determine the type of order ID to use for cancellation
         # OKX supports both client order ID and exchange order ID for cancellation
         if req.orderid in self.local_orderids:
             # Use client order ID if it was created by this gateway instance
-            args["clOrdId"] = req.orderid
+            arg["clOrdId"] = req.orderid
         else:
             # Use exchange order ID if it came from another source
-            args["ordId"] = req.orderid
+            arg["ordId"] = req.orderid
 
         # Create websocket request with unique request ID
         self.reqid += 1
         packet: dict = {
             "id": str(self.reqid),
             "op": "cancel-order",
-            "args": [args]
+            "args": [arg]
         }
 
         # Send the cancellation request
@@ -1854,7 +1813,7 @@ class BusinessApi(WebsocketApi):
         msg: str = packet["msg"]
 
         # Log the error with details for debugging
-        self.gateway.write_log(f"Business API request failed, status code: {code}, message: {msg}")
+        self.gateway.write_log(f"{self.name} request failed, status code: {code}, message: {msg}")
 
     def on_login(self, packet: dict) -> None:
         """
@@ -1867,10 +1826,10 @@ class BusinessApi(WebsocketApi):
             packet: Login response data from websocket
         """
         if packet["code"] == '0':
-            self.gateway.write_log("Business API login successful")
+            self.gateway.write_log(f"{self.name} login successful")
             self.subscribe_topic()
         else:
-            self.gateway.write_log("Business API login failed")
+            self.gateway.write_log(f"{self.name} login failed")
 
     def on_order(self, packet: dict) -> None:
         """
