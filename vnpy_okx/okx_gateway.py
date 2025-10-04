@@ -293,7 +293,15 @@ class OkxGateway(BaseGateway):
         Returns:
             list[BarData]: List of historical kline data bars
         """
-        return self.rest_api.query_history(req)
+        contract: ContractData | None = self.symbol_contract_map.get(req.symbol, None)
+        if not contract:
+            self.write_log(f"Failed to query history, symbol not found: {req.symbol}")
+            return []
+
+        if contract.product == Product.SPREAD:
+            return self.rest_api.query_spread_history(req)
+        else:
+            return self.rest_api.query_history(req)
 
     def close(self) -> None:
         """
@@ -642,6 +650,107 @@ class RestApi(RestClient):
             "/api/v5/sprd/orders-pending",
             callback=self.on_query_spread_order,
         )
+
+    def query_spread_history(self, req: HistoryRequest) -> list[BarData]:
+        """
+        Query kline history data.
+
+        This function sends requests to get historical kline data
+        for a specific trading instrument and time period.
+
+        Parameters:
+            req: History request object containing query parameters
+
+        Returns:
+            list[BarData]: List of historical kline data bars
+        """
+        # Validate symbol exists in contract map
+        contract: ContractData | None = self.gateway.get_contract_by_symbol(req.symbol)
+        if not contract:
+            self.gateway.write_log(f"Query kline history failed, symbol not found: {req.symbol}")
+            return []
+
+        # Initialize buffer for storing bars
+        buf: dict[datetime, BarData] = {}
+
+        path: str = "/api/v5/market/sprd-history-candles"
+        limit: str = "100"
+
+        if not req.end:
+            req.end = datetime.now()
+
+        after: str = str(int(req.end.timestamp() * 1000))
+
+        # Loop until no more data or request fails
+        while True:
+            # Create query params
+            params: dict = {
+                "sprdId": contract.name,
+                "bar": INTERVAL_VT2OKX[req.interval],
+                "limit": limit,
+                "after": after
+            }
+
+            # Get response from server
+            resp: Response = self.request(
+                "GET",
+                path,
+                params=params
+            )
+
+            # Break loop if request is failed
+            if resp.status_code // 100 != 2:
+                log_msg: str = f"Query kline history failed, status code: {resp.status_code}, message: {resp.text}"
+                self.gateway.write_log(log_msg)
+                break
+            else:
+                data: dict = resp.json()
+                bar_data: list = data.get("data", None)
+
+                if not bar_data:
+                    msg: str = data["msg"]
+                    log_msg = f"No kline history data received, {msg}"
+                    break
+
+                for row in bar_data:
+                    ts, op, hp, lp, cp, volume, _ = row
+
+                    dt: datetime = parse_timestamp(ts)
+
+                    bar: BarData = BarData(
+                        symbol=req.symbol,
+                        exchange=req.exchange,
+                        datetime=dt,
+                        interval=req.interval,
+                        volume=float(volume),
+                        open_price=float(op),
+                        high_price=float(hp),
+                        low_price=float(lp),
+                        close_price=float(cp),
+                        gateway_name=self.gateway_name
+                    )
+                    buf[bar.datetime] = bar
+
+                begin: str = bar_data[-1][0]
+                begin_dt: datetime = parse_timestamp(begin)
+                end: str = bar_data[0][0]
+                end_dt: datetime = parse_timestamp(end)
+
+                log_msg = f"Query kline history finished, {req.symbol} - {req.interval.value}, {begin_dt} - {end_dt}"
+                self.gateway.write_log(log_msg)
+
+                # Break if all bars have been queried
+                if begin_dt <= req.start:
+                    break
+
+                # Update start time
+                after = begin
+
+        index: list[datetime] = list(buf.keys())
+        index.sort()
+
+        history: list[BarData] = [buf[i] for i in index]
+        return history
 
     def on_query_time(self, packet: dict, request: Request) -> None:
         """
