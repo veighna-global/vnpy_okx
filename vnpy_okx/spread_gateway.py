@@ -987,7 +987,7 @@ class BusinessApi(WebsocketClient):
                 direction=DIRECTION_OKX2VT[d["side"]],
                 price=float(d["fillPx"]),
                 volume=float(d["fillSz"]),
-                datetime=parse_timestamp(d["uTime"]),
+                datetime=parse_timestamp(d["ts"]),
                 gateway_name=self.gateway_name,
             )
             self.gateway.on_trade(trade)
