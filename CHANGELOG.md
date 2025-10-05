@@ -1,3 +1,8 @@
+# 2025.10.05
+
+1. support OKX exchange spread trading API
+2. added standard application level heartbeat for websocket api
+
 # 2025.06.17
 
 1. fixed wrong timezone issue

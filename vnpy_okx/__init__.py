@@ -21,10 +21,9 @@
 # SOFTWARE.
 
 from .okx_gateway import OkxGateway
-from .spread_gateway import SpreadGateway
 
 
-__version__ = "2025.06.17"
+__version__ = "2025.10.05"
 
 
-__all__ = ["OkxGateway", "SpreadGateway"]
+__all__ = ["OkxGateway"]
