@@ -782,13 +782,16 @@ class RestApi(RestClient):
         data: list = packet["data"]
 
         for d in data:
-            name: str = d["sprdId"]
-            symbol: str = name + "_OKX"
+            leg_symbols: list[str] = []
+            for leg in d["legs"]:
+                leg_name: str = leg["instId"]
+                leg_contract: ContractData = self.gateway.get_contract_by_name(leg_name)
+                leg_symbols.append(leg_contract.symbol)
 
             contract: ContractData = ContractData(
-                symbol=symbol,
+                symbol="-".join(leg_symbols),
                 exchange=Exchange.GLOBAL,
-                name=name,
+                name=d["sprdId"],
                 product=Product.SPREAD,
                 size=float(d["lotSz"]),
                 pricetick=float(d["tickSz"]),
