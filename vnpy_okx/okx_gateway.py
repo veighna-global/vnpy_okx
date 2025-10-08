@@ -1602,15 +1602,9 @@ class PrivateApi(WebsocketApi):
             "side": DIRECTION_VT2OKX[req.direction],
             "ordType": ORDERTYPE_VT2OKX[req.type],
             "px": str(req.price),
-            "sz": str(req.volume)
+            "sz": str(req.volume),
+            "tdMode": "cross"       # Only support cross margin mode
         }
-
-        # Set trading mode based on product type
-        # "cash" for spot trading, "cross" for futures/swap with cross margin
-        if contract.product == Product.SPOT:
-            arg["tdMode"] = "cash"
-        else:
-            arg["tdMode"] = "cross"
 
         # Create websocket request with unique request ID
         self.reqid += 1
