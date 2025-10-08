@@ -1,3 +1,7 @@
+# 2025.10.8
+
+1. only support cross margin mode for all assets trading: spot/futures/swap/option
+
 # 2025.10.05
 
 1. support OKX exchange spread trading API
