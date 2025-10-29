@@ -1,4 +1,8 @@
-# 2025.10.8
+# 2025.10.29
+
+1. use "ctVal" instead of "ctMult" for contract size
+
+# 2025.10.08
 
 1. only support cross margin mode for all assets trading: spot/futures/swap/option
 
