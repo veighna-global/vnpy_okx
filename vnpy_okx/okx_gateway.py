@@ -719,8 +719,10 @@ class RestApi(RestClient):
 
             if product == Product.SPOT:
                 size: float = 1
-            else:
+            elif d["ctVal"]:
                 size = float(d["ctVal"])
+            else:
+                size = 1
 
             match product:
                 case Product.SPOT:
