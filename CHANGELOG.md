@@ -1,3 +1,7 @@
+# 2025.11.01
+
+1. set contract size to 1 when ctVal is empty string
+
 # 2025.10.29
 
 1. use "ctVal" instead of "ctMult" for contract size
