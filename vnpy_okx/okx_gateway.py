@@ -8,6 +8,7 @@ from datetime import datetime
 from urllib.parse import urlencode
 from types import TracebackType
 from collections.abc import Callable
+from time import sleep
 
 from vnpy.event import EventEngine, Event, EVENT_TIMER
 from vnpy.trader.constant import (
@@ -889,6 +890,9 @@ class RestApi(RestClient):
 
         # Loop until no more data or request fails
         while True:
+            # Add small delay to avoid rate limit
+            sleep(0.1)
+
             # Create query params
             params: dict = {
                 id_key: contract.name,
