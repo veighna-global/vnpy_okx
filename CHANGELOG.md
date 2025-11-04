@@ -1,3 +1,7 @@
+# 2025.11.04
+
+1. Filter duplicate subscription
+
 # 2025.11.01
 
 1. set contract size to 1 when ctVal is empty string
