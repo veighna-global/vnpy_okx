@@ -152,6 +152,8 @@ class OkxGateway(BaseGateway):
         self.ping_count: int = 0
         self.ping_interval: int = 20
 
+        self.subscribed_symbols: set[str] = set()
+
     def connect(self, setting: dict) -> None:
         """
         Start server connections.
@@ -218,11 +220,18 @@ class OkxGateway(BaseGateway):
         Parameters:
             req: Subscription request object containing symbol information
         """
+        # Check if symbol exists in contract map
         contract: ContractData | None = self.symbol_contract_map.get(req.symbol, None)
         if not contract:
             self.write_log(f"Failed to subscribe data, symbol not found: {req.symbol}")
             return
 
+        # Filter duplicate subscription
+        if req.vt_symbol in self.subscribed_symbols:
+            return
+        self.subscribed_symbols.add(req.vt_symbol)
+
+        # Send request to corresponding API
         if contract.product == Product.SPREAD:
             self.business_api.subscribe(req)
         else:
