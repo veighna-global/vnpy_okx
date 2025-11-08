@@ -1,3 +1,9 @@
+# 2025.11.08
+
+1. ignore exception when sending ping
+2. remove old AWS endpoints
+3. add small delay (0.1s) to avoid rate limit when querying history data
+
 # 2025.11.04
 
 1. Filter duplicate subscription
