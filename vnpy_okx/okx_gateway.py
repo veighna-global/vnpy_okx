@@ -48,12 +48,6 @@ REAL_PUBLIC_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
 REAL_PRIVATE_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
 REAL_BUSINESS_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
-# AWS server hosts
-AWS_REST_HOST: str = "https://aws.okx.com"
-AWS_PUBLIC_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/public"
-AWS_PRIVATE_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/private"
-AWS_BUSINESS_HOST: str = "wss://wsaws.okx.com:8443/ws/v5/business"
-
 # Demo server hosts
 DEMO_REST_HOST: str = "https://www.okx.com"
 DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public"
@@ -114,7 +108,7 @@ class OkxGateway(BaseGateway):
         "API Key": "",
         "Secret Key": "",
         "Passphrase": "",
-        "Server": ["REAL", "AWS", "DEMO"],
+        "Server": ["REAL", "DEMO"],
         "Proxy Host": "",
         "Proxy Port": 0,
         "Spread Trading": ["False", "True"],
@@ -567,7 +561,7 @@ class RestApi(RestClient):
             key: API Key for authentication
             secret: API Secret for request signing
             passphrase: API Passphrase for authentication
-            server: Server type ("REAL", "AWS", or "DEMO")
+            server: Server type ("REAL" or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
             spread_trading: Whether to enable spread trading
@@ -583,7 +577,6 @@ class RestApi(RestClient):
 
         server_hosts: dict[str, str] = {
             "REAL": REAL_REST_HOST,
-            "AWS": AWS_REST_HOST,
             "DEMO": DEMO_REST_HOST,
         }
 
@@ -1128,7 +1121,6 @@ class PublicApi(WebsocketApi):
 
         self.server_hosts: dict[str, str] = {
             "REAL": REAL_PUBLIC_HOST,
-            "AWS": AWS_PUBLIC_HOST,
             "DEMO": DEMO_PUBLIC_HOST,
         }
 
@@ -1288,7 +1280,6 @@ class PrivateApi(WebsocketApi):
 
         self.server_hosts: dict[str, str] = {
             "REAL": REAL_PRIVATE_HOST,
-            "AWS": AWS_PRIVATE_HOST,
             "DEMO": DEMO_PRIVATE_HOST,
         }
 
@@ -1312,7 +1303,7 @@ class PrivateApi(WebsocketApi):
             key: API Key for authentication
             secret: API Secret for request signing
             passphrase: API Passphrase for authentication
-            server: Server type ("REAL", "AWS", or "DEMO")
+            server: Server type ("REAL" or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
         """
@@ -1714,7 +1705,6 @@ class BusinessApi(WebsocketApi):
 
         self.server_hosts: dict[str, str] = {
             "REAL": REAL_BUSINESS_HOST,
-            "AWS": AWS_BUSINESS_HOST,
             "DEMO": DEMO_BUSINESS_HOST,
         }
 
@@ -1738,7 +1728,7 @@ class BusinessApi(WebsocketApi):
             key: API Key for authentication
             secret: API Secret for request signing
             passphrase: API Passphrase for authentication
-            server: Server type ("REAL", "AWS", or "DEMO")
+            server: Server type ("REAL" or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
         """
