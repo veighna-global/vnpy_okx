@@ -1095,7 +1095,10 @@ class WebsocketApi(WebsocketClient):
     def send_ping(self) -> None:
         """Send heartbeat ping to server"""
         if self.connected:
-            self.wsapp.send("ping")
+            try:
+                self.wsapp.send("ping")
+            except Exception:
+                pass
 
 
 class PublicApi(WebsocketApi):
