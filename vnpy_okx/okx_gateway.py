@@ -112,6 +112,7 @@ class OkxGateway(BaseGateway):
         "Proxy Host": "",
         "Proxy Port": 0,
         "Spread Trading": ["False", "True"],
+        "Margin Currency": ""
     }
 
     exchanges: Exchange = [Exchange.GLOBAL]
@@ -132,6 +133,7 @@ class OkxGateway(BaseGateway):
         self.proxy_host: str = ""
         self.proxy_port: int = 0
         self.spread_trading: bool = False
+        self.margin_currency: str = ""
 
         self.orders: dict[str, OrderData] = {}
         self.local_orderids: set[str] = set()
@@ -167,6 +169,7 @@ class OkxGateway(BaseGateway):
         self.proxy_host = setting["Proxy Host"]
         self.proxy_port = setting["Proxy Port"]
         self.spread_trading = setting["Spread Trading"] == "True"
+        self.margin_currency = setting["Margin Currency"]
 
         self.rest_api.connect(
             self.key,
@@ -194,6 +197,7 @@ class OkxGateway(BaseGateway):
             self.server,
             self.proxy_host,
             self.proxy_port,
+            self.margin_currency,
         )
 
         if self.spread_trading:
@@ -1266,6 +1270,7 @@ class PrivateApi(WebsocketApi):
         self.key: str = ""
         self.secret: bytes = b""
         self.passphrase: str = ""
+        self.margin_currency: str = ""
 
         self.reqid: int = 0
         self.order_count: int = 0
@@ -1296,6 +1301,7 @@ class PrivateApi(WebsocketApi):
         server: str,
         proxy_host: str,
         proxy_port: int,
+        margin_currency: str,
     ) -> None:
         """
         Start server connection.
@@ -1309,10 +1315,12 @@ class PrivateApi(WebsocketApi):
             server: Server type ("REAL" or "DEMO")
             proxy_host: Proxy server hostname or IP
             proxy_port: Proxy server port
+            margin_currency: Margin currency
         """
         self.key = key
         self.secret = secret.encode()
         self.passphrase = passphrase
+        self.margin_currency = margin_currency
 
         self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S"))
 
@@ -1614,6 +1622,9 @@ class PrivateApi(WebsocketApi):
             "sz": str(req.volume),
             "tdMode": "cross"       # Only support cross margin mode
         }
+
+        if self.margin_currency:
+            arg["ccy"] = self.margin_currency
 
         # Create websocket request with unique request ID
         self.reqid += 1
