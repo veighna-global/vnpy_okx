@@ -1,3 +1,7 @@
+# 2025.12.04
+
+1. support for margin currency field "ccy" when sending order
+
 # 2025.11.08
 
 1. ignore exception when sending ping
