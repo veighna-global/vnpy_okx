@@ -1,3 +1,7 @@
+# 2025.12.22
+
+1. adjust fields for collecting account frozen and available value
+
 # 2025.12.04
 
 1. support for margin currency field "ccy" when sending order
