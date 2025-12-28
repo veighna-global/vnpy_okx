@@ -1516,10 +1516,11 @@ class PrivateApi(WebsocketApi):
         """
         # Wrong parameters
         if packet["code"] != "0":
-            code: str = packet["code"]
             msg: str = packet["msg"]
-            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
-            return
+            if msg:
+                code: str = packet["code"]
+                self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
+                return
 
         # Failed to process
         data: list = packet["data"]
@@ -1660,7 +1661,7 @@ class PrivateApi(WebsocketApi):
             return
 
         # Initialize cancel parameters
-        arg: dict = {}
+        arg: dict = {"instId": contract.name}
 
         # Determine the type of order ID to use for cancellation
         # OKX supports both client order ID and exchange order ID for cancellation
@@ -1954,10 +1955,11 @@ class BusinessApi(WebsocketApi):
         """
         # Wrong parameters
         if packet["code"] != "0":
-            code: str = packet["code"]
             msg: str = packet["msg"]
-            self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
-            return
+            if msg:
+                code: str = packet["code"]
+                self.gateway.write_log(f"Cancel order failed, status code: {code}, message: {msg}")
+                return
 
         # Failed to process
         data: list = packet["data"]
