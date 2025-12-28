@@ -1,3 +1,7 @@
+# 2025.12.28
+
+1. Fix missing "instId" field when cancelling order
+
 # 2025.12.22
 
 1. adjust fields for collecting account frozen and available value
