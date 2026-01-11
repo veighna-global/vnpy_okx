@@ -23,7 +23,7 @@
 from .okx_gateway import OkxGateway
 
 
-__version__ = "2025.12.28"
+__version__ = "2026.01.11"
 
 
 __all__ = ["OkxGateway"]
