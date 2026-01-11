@@ -10,6 +10,7 @@ from types import TracebackType
 from collections.abc import Callable
 from time import sleep
 from decimal import Decimal
+from typing import cast
 
 from vnpy.event import EventEngine, Event, EVENT_TIMER
 from vnpy.trader.constant import (
@@ -339,7 +340,7 @@ class OkxGateway(BaseGateway):
         self.orders[order.orderid] = order
         super().on_order(order)
 
-    def get_order(self, orderid: str) -> OrderData:
+    def get_order(self, orderid: str) -> OrderData | None:
         """
         Get previously saved order by order id.
 
@@ -401,7 +402,7 @@ class OkxGateway(BaseGateway):
         Returns:
             OrderData: VeighNa order object
         """
-        contract: ContractData = self.get_contract_by_name(data["instId"])
+        contract: ContractData = cast(ContractData, self.get_contract_by_name(data["instId"]))
 
         order_id: str = data["clOrdId"]
         if order_id:
@@ -439,7 +440,7 @@ class OkxGateway(BaseGateway):
         Returns:
             OrderData: VeighNa order object
         """
-        contract: ContractData = self.get_contract_by_name(data["sprdId"])
+        contract: ContractData = cast(ContractData, self.get_contract_by_name(data["sprdId"]))
 
         order_id: str = data["clOrdId"]
         if order_id:
@@ -796,7 +797,7 @@ class RestApi(RestClient):
             leg_symbols: list[str] = []
             for leg in d["legs"]:
                 leg_name: str = leg["instId"]
-                leg_contract: ContractData = self.gateway.get_contract_by_name(leg_name)
+                leg_contract: ContractData = cast(ContractData, self.gateway.get_contract_by_name(leg_name))
                 leg_symbols.append(leg_contract.symbol)
 
             contract: ContractData = ContractData(
@@ -878,6 +879,11 @@ class RestApi(RestClient):
             self.gateway.write_log(f"Query kline history failed, symbol not found: {req.symbol}")
             return []
 
+        # Validate interval is not None
+        if not req.interval:
+            self.gateway.write_log(f"Query kline history failed, interval not found: {req.symbol}")
+            return []
+
         # Initialize buffer for storing bars
         buf: dict[datetime, BarData] = {}
         limit: str = "100"
@@ -914,7 +920,7 @@ class RestApi(RestClient):
                 break
             else:
                 data: dict = resp.json()
-                bar_data: list = data.get("data", None)
+                bar_data: list | None = data.get("data", None)
 
                 if not bar_data:
                     msg: str = data.get("msg", "No data returned.")
@@ -1396,7 +1402,7 @@ class PrivateApi(WebsocketApi):
             # Process trade data for filled or partially filled orders
             # Round trade volume number to meet minimum volume precision
             trade_volume: float = float(d["fillSz"])
-            contract: ContractData = self.gateway.get_contract_by_symbol(order.symbol)
+            contract: ContractData | None = self.gateway.get_contract_by_symbol(order.symbol)
             if contract:
                 trade_volume = round_to(trade_volume, contract.min_volume)
 
@@ -1452,7 +1458,7 @@ class PrivateApi(WebsocketApi):
         data: list = packet["data"]
         for d in data:
             name: str = d["instId"]
-            contract: ContractData = self.gateway.get_contract_by_name(name)
+            contract: ContractData = cast(ContractData, self.gateway.get_contract_by_name(name))
 
             pos: float = float(d["pos"])
             price: float = get_float_value(d, "avgPx")
@@ -1484,9 +1490,11 @@ class PrivateApi(WebsocketApi):
         # Wrong parameters
         if packet["code"] != "0":
             if not data:
-                order: OrderData = self.reqid_order_map[packet["id"]]
-                order.status = Status.REJECTED
-                self.gateway.on_order(order)
+                order: OrderData | None = self.reqid_order_map.get(packet["id"], None)
+                if order:
+                    order.status = Status.REJECTED
+                    self.gateway.on_order(order)
+
                 return
 
         # Failed to process
