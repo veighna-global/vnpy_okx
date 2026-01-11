@@ -116,7 +116,7 @@ class OkxGateway(BaseGateway):
         "Margin Currency": ""
     }
 
-    exchanges: Exchange = [Exchange.GLOBAL]
+    exchanges: list[Exchange] = [Exchange.GLOBAL]
 
     def __init__(self, event_engine: EventEngine, gateway_name: str) -> None:
         """
@@ -764,6 +764,7 @@ class RestApi(RestClient):
                 net_position=net_position,
                 gateway_name=self.gateway_name,
             )
+            contract.extra = d
 
             self.gateway.on_contract(contract)
 
@@ -1625,8 +1626,14 @@ class PrivateApi(WebsocketApi):
             "tdMode": "cross"       # Only support cross margin mode
         }
 
+        # Add extra field for portfolio margin
         if self.margin_currency:
             arg["ccy"] = self.margin_currency
+
+        # Add extra field for spot
+        if "SPOT" in req.symbol:
+            quote_ccy_list: list[str] = contract.extra["tradeQuoteCcyList"]     # type: ignore
+            arg["tradeQuoteCcy"] = quote_ccy_list[0]
 
         # Create websocket request with unique request ID
         self.reqid += 1
