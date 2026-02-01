@@ -513,6 +513,13 @@ class RestApi(RestClient):
         Returns:
             Request: Modified request with authentication parameters
         """
+        # Add simulated trading header for demo server (applies to all requests)
+        if self.simulated:
+            if not request.headers:
+                request.headers = {"x-simulated-trading": "1"}
+            else:
+                request.headers["x-simulated-trading"] = "1"
+
         # Public API does not need to sign
         if "public" in request.path:
             return request
@@ -740,7 +747,11 @@ class RestApi(RestClient):
                     base, quote, _ = name.split("-")
                     symbol = base + quote + "_SWAP_OKX"
                 case Product.FUTURES:
-                    base, quote, expiry = name.split("-")
+                    symbol_parts: list[str] = name.split("-")
+                    if len(symbol_parts) < 3:
+                        continue
+
+                    base, quote, expiry = symbol_parts
                     symbol = base + quote + "_" + expiry + "_OKX"
 
             if d["tickSz"]:
@@ -859,6 +870,8 @@ class RestApi(RestClient):
             request: Original request object
         """
         detail: str = self.exception_detail(exc, value, tb, request)
+        # Escape curly braces to prevent loguru from interpreting them as format placeholders
+        detail = detail.replace("{", "{{").replace("}", "}}")
 
         msg: str = f"Exception catched by REST API: {detail}"
         self.gateway.write_log(msg)
@@ -1625,7 +1638,7 @@ class PrivateApi(WebsocketApi):
 
         # Prepare order parameters for OKX API
         arg: dict = {
-            "instId": contract.name,
+            "instIdCode": contract.extra["instIdCode"],     # type: ignore
             "clOrdId": orderid,
             "side": DIRECTION_VT2OKX[req.direction],
             "ordType": ORDERTYPE_VT2OKX[req.type],
@@ -1676,7 +1689,7 @@ class PrivateApi(WebsocketApi):
             return
 
         # Initialize cancel parameters
-        arg: dict = {"instId": contract.name}
+        arg: dict = {"instIdCode": contract.extra["instIdCode"]}     # type: ignore
 
         # Determine the type of order ID to use for cancellation
         # OKX supports both client order ID and exchange order ID for cancellation
