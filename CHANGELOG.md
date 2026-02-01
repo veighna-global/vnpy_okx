@@ -1,3 +1,12 @@
+# 2026.02.01
+
+1. replace 'instId' with 'instIdCode' for trading functions
+
+# 2026.01.11
+
+1. add extra "tradeQuoteCcy" field for spot trading order
+2. improve type hinting based on mypy
+
 # 2025.12.28
 
 1. Fix missing "instId" field when cancelling order
