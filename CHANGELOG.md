@@ -1,3 +1,7 @@
+# 2026.02.05
+
+1. fix missing parameter in on_disconnected callback
+
 # 2026.02.01
 
 1. replace 'instId' with 'instIdCode' for trading functions
