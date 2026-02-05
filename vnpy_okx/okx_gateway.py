@@ -1079,12 +1079,12 @@ class WebsocketApi(WebsocketClient):
         self.connected = True
         self.gateway.write_log(f"{self.name} connected")
 
-    def on_disconnected(self) -> None:
+    def on_disconnected(self, status_code: int, msg: str) -> None:
         """
         Callback when server is disconnected.
         """
         self.connected = False
-        self.gateway.write_log(f"{self.name} disconnected")
+        self.gateway.write_log(f"{self.name} disconnected, code: {status_code}, msg: {msg}")
 
     def on_message(self, message: str) -> None:
         """
