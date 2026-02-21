@@ -1144,6 +1144,7 @@ class PublicApi(WebsocketApi):
         self.callbacks: dict[str, Callable] = {
             "tickers": self.on_ticker,
             "books5": self.on_depth,
+            "funding-rate": self.on_funding_rate,
             "error": self.on_api_error
         }
 
@@ -1185,6 +1186,7 @@ class PublicApi(WebsocketApi):
             datetime=datetime.now(CHINA_TZ),
             gateway_name=self.gateway_name,
         )
+        tick.extra = {}
         self.ticks[contract.name] = tick
 
         # Send request to subscribe
@@ -1192,6 +1194,12 @@ class PublicApi(WebsocketApi):
         for channel in ["tickers", "books5"]:
             args.append({
                 "channel": channel,
+                "instId": contract.name
+            })
+
+        if contract.product == Product.SWAP:
+            args.append({
+                "channel": "funding-rate",
                 "instId": contract.name
             })
 
@@ -1271,6 +1279,26 @@ class PublicApi(WebsocketApi):
                 tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
 
             tick.datetime = parse_timestamp(d["ts"])
+            self.gateway.on_tick(copy(tick))
+
+    def on_funding_rate(self, packet: dict) -> None:
+        """
+        Callback of funding rate update.
+
+        Parameters:
+            packet: Funding rate data from websocket
+        """
+        for d in packet["data"]:
+            tick: TickData | None = self.ticks.get(d["instId"])
+            if not tick:
+                continue
+
+            if tick.extra is None:
+                tick.extra = {}
+
+            tick.extra["funding_rate"] = float(d["fundingRate"])
+            tick.extra["funding_time"] = int(d["fundingTime"])
+
             self.gateway.on_tick(copy(tick))
 
 
