@@ -1,3 +1,8 @@
+# 2026.02.28
+
+1. support funding rate subscription for swap
+2. modify the available and frozen field used for AccountData
+
 # 2026.02.05
 
 1. fix missing parameter in on_disconnected callback
