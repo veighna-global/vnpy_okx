@@ -9,7 +9,6 @@ from urllib.parse import urlencode
 from types import TracebackType
 from collections.abc import Callable
 from time import sleep
-from decimal import Decimal
 from typing import cast
 
 from vnpy.event import EventEngine, Event, EVENT_TIMER
@@ -1482,8 +1481,8 @@ class PrivateApi(WebsocketApi):
                 balance=float(detail["eq"]),
                 gateway_name=self.gateway_name,
             )
-            account.available = float(detail["availBal"])
-            account.frozen = float(Decimal(detail["eq"]) - Decimal(detail["availBal"]))
+            account.available = float(detail["availEq"])
+            account.frozen = float(detail["frozenBal"])
             self.gateway.on_account(account)
 
     def on_position(self, packet: dict) -> None:
