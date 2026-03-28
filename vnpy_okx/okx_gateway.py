@@ -40,7 +40,7 @@ from vnpy_rest import Request, Response, RestClient
 from vnpy_websocket import WebsocketClient
 
 
-# UTC timezone
+# China timezone
 CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 
 # Real server hosts
@@ -2270,8 +2270,7 @@ def parse_timestamp(timestamp: str) -> datetime:
     Returns:
         datetime: Datetime object with UTC timezone
     """
-    dt: datetime = datetime.fromtimestamp(int(timestamp) / 1000)
-    return dt.replace(tzinfo=CHINA_TZ)
+    return datetime.fromtimestamp(int(timestamp) / 1000, tz=CHINA_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
