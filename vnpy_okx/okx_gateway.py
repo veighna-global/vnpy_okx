@@ -40,8 +40,8 @@ from vnpy_rest import Request, Response, RestClient
 from vnpy_websocket import WebsocketClient
 
 
-# China timezone
-CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
+# UTC timezone
+UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
 REAL_REST_HOST: str = "https://www.okx.com"
@@ -685,7 +685,7 @@ class RestApi(RestClient):
             request: Original request object
         """
         timestamp: int = int(packet["data"][0]["ts"])
-        server_time: datetime = datetime.fromtimestamp(timestamp / 1000)
+        server_time: datetime = datetime.fromtimestamp(timestamp / 1000, UTC_TZ)
         local_time: datetime = datetime.now()
 
         msg: str = f"Server time: {server_time}, local time: {local_time}"
@@ -901,7 +901,7 @@ class RestApi(RestClient):
         limit: str = "100"
 
         if not req.end:
-            req.end = datetime.now()
+            req.end = datetime.now(UTC_TZ)
 
         after: str = str(int(req.end.timestamp() * 1000))
 
@@ -1182,7 +1182,7 @@ class PublicApi(WebsocketApi):
             symbol=req.symbol,
             exchange=req.exchange,
             name=contract.name,
-            datetime=datetime.now(CHINA_TZ),
+            datetime=datetime.now(UTC_TZ),
             gateway_name=self.gateway_name,
         )
         tick.extra = {}
@@ -1835,7 +1835,7 @@ class BusinessApi(WebsocketApi):
             symbol=req.symbol,
             exchange=req.exchange,
             name=contract.name,
-            datetime=datetime.now(CHINA_TZ),
+            datetime=datetime.now(UTC_TZ),
             gateway_name=self.gateway_name,
         )
         self.ticks[contract.name] = tick
@@ -2270,7 +2270,7 @@ def parse_timestamp(timestamp: str) -> datetime:
     Returns:
         datetime: Datetime object with UTC timezone
     """
-    return datetime.fromtimestamp(int(timestamp) / 1000, tz=CHINA_TZ)
+    return datetime.fromtimestamp(int(timestamp) / 1000, tz=UTC_TZ)
 
 
 def get_float_value(data: dict, key: str) -> float:
