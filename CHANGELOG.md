@@ -1,3 +1,7 @@
+# 2026.04.19
+
+1. only update tick.datetime in on_depth callback (remove the on_ticker update)
+
 # 2026.04.15
 
 1. change timezone to UTC
