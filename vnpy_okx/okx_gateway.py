@@ -1249,7 +1249,6 @@ class PublicApi(WebsocketApi):
             tick.volume = float(d["vol24h"])
             tick.turnover = float(d["volCcy24h"])
 
-            tick.datetime = parse_timestamp(d["ts"])
             self.gateway.on_tick(copy(tick))
 
     def on_depth(self, packet: dict) -> None:
