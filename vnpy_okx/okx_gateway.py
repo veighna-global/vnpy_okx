@@ -91,9 +91,14 @@ INTERVAL_VT2OKX: dict[Interval, str] = {
 PRODUCT_OKX2VT: dict[str, Product] = {
     "SWAP": Product.SWAP,
     "SPOT": Product.SPOT,
-    "FUTURES": Product.FUTURES
+    "FUTURES": Product.FUTURES,
+    "MARGIN": Product.SPOT
 }
-PRODUCT_VT2OKX: dict[Product, str] = {v: k for k, v in PRODUCT_OKX2VT.items()}
+PRODUCT_VT2OKX: dict[Product, str] = {
+    Product.SWAP: "SWAP",
+    Product.SPOT: "SPOT",
+    Product.FUTURES: "FUTURES"
+}
 
 
 class OkxGateway(BaseGateway):
@@ -140,7 +145,7 @@ class OkxGateway(BaseGateway):
         self.local_orderids: set[str] = set()
 
         self.symbol_contract_map: dict[str, ContractData] = {}
-        self.name_contract_map: dict[str, ContractData] = {}
+        self.type_contract_map: dict[tuple[str, str], ContractData] = {}
 
         self.rest_api: RestApi = RestApi(self)
         self.public_api: PublicApi = PublicApi(self)
@@ -359,7 +364,16 @@ class OkxGateway(BaseGateway):
             contract: Contract data object
         """
         self.symbol_contract_map[contract.symbol] = contract
-        self.name_contract_map[contract.name] = contract
+
+        inst_type: str = ""
+        if contract.extra:
+            inst_type = contract.extra.get("instType", "")
+
+        if inst_type:
+            self.type_contract_map[(inst_type, contract.name)] = contract
+
+        if inst_type != "MARGIN":
+            self.type_contract_map[("", contract.name)] = contract
 
         super().on_contract(contract)
 
@@ -375,7 +389,7 @@ class OkxGateway(BaseGateway):
         """
         return self.symbol_contract_map.get(symbol, None)
 
-    def get_contract_by_name(self, name: str) -> ContractData | None:
+    def get_contract_by_name(self, name: str, inst_type: str = "") -> ContractData | None:
         """
         Get contract by exchange symbol name.
 
@@ -385,7 +399,7 @@ class OkxGateway(BaseGateway):
         Returns:
             ContractData: Contract data object if found, None otherwise
         """
-        return self.name_contract_map.get(name, None)
+        return self.type_contract_map.get((inst_type, name), None)
 
     def parse_order_data(self, data: dict, gateway_name: str) -> OrderData:
         """
@@ -401,7 +415,10 @@ class OkxGateway(BaseGateway):
         Returns:
             OrderData: VeighNa order object
         """
-        contract: ContractData = cast(ContractData, self.get_contract_by_name(data["instId"]))
+        contract: ContractData = cast(
+            ContractData,
+            self.get_contract_by_name(data["instId"], data.get("instType", ""))
+        )
 
         order_id: str = data["clOrdId"]
         if order_id:
@@ -497,7 +514,7 @@ class RestApi(RestClient):
         self.passphrase: str = ""
         self.simulated: bool = False
 
-        self.product_ready: set = set()
+        self.product_ready: set[str] = set()
 
     def sign(self, request: Request) -> Request:
         """
@@ -723,14 +740,23 @@ class RestApi(RestClient):
             request: Original request object
         """
         data: list = packet["data"]
+        inst_type: str = request.params["instType"]
 
         if not data:
+            self.gateway.write_log(f"{inst_type} contract data received")
+            self.product_ready.add(inst_type)
+
+            if len(self.product_ready) == len(PRODUCT_OKX2VT):
+                self.query_order()
+
+                self.gateway.connect_ws_api()
+
             return
 
         for d in data:
             name: str = d["instId"]
-            product: Product = PRODUCT_OKX2VT[d["instType"]]
-            net_position: bool = True
+            okx_inst_type: str = d["instType"]
+            product: Product = PRODUCT_OKX2VT[okx_inst_type]
 
             if product == Product.SPOT:
                 size: float = 1
@@ -739,19 +765,22 @@ class RestApi(RestClient):
             else:
                 size = 1
 
-            match product:
-                case Product.SPOT:
-                    symbol: str = name.replace("-", "") + "_SPOT_OKX"
-                case Product.SWAP:
-                    base, quote, _ = name.split("-")
-                    symbol = base + quote + "_SWAP_OKX"
-                case Product.FUTURES:
-                    symbol_parts: list[str] = name.split("-")
-                    if len(symbol_parts) < 3:
-                        continue
+            if okx_inst_type == "MARGIN":
+                symbol: str = name.replace("-", "") + "_MARGIN_OKX"
+            else:
+                match product:
+                    case Product.SPOT:
+                        symbol = name.replace("-", "") + "_SPOT_OKX"
+                    case Product.SWAP:
+                        base, quote, _ = name.split("-")
+                        symbol = base + quote + "_SWAP_OKX"
+                    case Product.FUTURES:
+                        symbol_parts: list[str] = name.split("-")
+                        if len(symbol_parts) < 3:
+                            continue
 
-                    base, quote, expiry = symbol_parts
-                    symbol = base + quote + "_" + expiry + "_OKX"
+                        base, quote, expiry = symbol_parts
+                        symbol = base + quote + "_" + expiry + "_OKX"
 
             if d["tickSz"]:
                 pricetick: float = float(d["tickSz"])
@@ -772,18 +801,17 @@ class RestApi(RestClient):
                 pricetick=pricetick,
                 min_volume=min_volume,
                 history_data=True,
-                net_position=net_position,
+                net_position=True,
                 gateway_name=self.gateway_name,
             )
             contract.extra = d
 
             self.gateway.on_contract(contract)
 
-        inst_type: str = request.params["instType"]
         self.gateway.write_log(f"{inst_type} contract data received")
 
         # Connect to websocket API after all contract data received
-        self.product_ready.add(PRODUCT_OKX2VT[inst_type])
+        self.product_ready.add(inst_type)
 
         if len(self.product_ready) == len(PRODUCT_OKX2VT):
             self.query_order()
@@ -1497,11 +1525,18 @@ class PrivateApi(WebsocketApi):
         data: list = packet["data"]
         for d in data:
             name: str = d["instId"]
-            contract: ContractData = cast(ContractData, self.gateway.get_contract_by_name(name))
+            inst_type: str = d.get("instType", "")
+            contract: ContractData | None = self.gateway.get_contract_by_name(name, inst_type)
+            if not contract:
+                self.gateway.write_log(f"Failed to parse position data, contract not found: {name}")
+                continue
 
             pos: float = float(d["pos"])
             price: float = get_float_value(d, "avgPx")
             pnl: float = get_float_value(d, "upl")
+
+            if inst_type == "MARGIN":
+                pos = self.parse_margin_position_volume(d)
 
             position: PositionData = PositionData(
                 symbol=contract.symbol,
@@ -1513,6 +1548,47 @@ class PrivateApi(WebsocketApi):
                 gateway_name=self.gateway_name,
             )
             self.gateway.on_position(position)
+
+    def parse_margin_position_volume(self, data: dict) -> float:
+        """
+        Parse OKX margin position into base-currency net volume.
+        """
+        name: str = data["instId"]
+        base_ccy, quote_ccy = name.split("-")[:2]
+
+        pos: float = get_float_value(data, "pos")
+        pos_ccy: str = data.get("posCcy", "")
+
+        # Long margin positions are denominated in the base currency.
+        if pos_ccy == base_ccy:
+            return abs(pos)
+
+        # Unknown position currency: keep the exchange value unchanged.
+        if pos_ccy != quote_ccy:
+            return pos
+
+        # Short margin positions are denominated in the quote currency, so
+        # prefer the base-currency liability as the real position size.
+        liab: float = abs(get_float_value(data, "liab"))
+        liab_ccy: str = data.get("liabCcy", "")
+        if liab and liab_ccy == base_ccy:
+            return -liab
+
+        # Fall back to mark value conversion when liability is unavailable.
+        notional_usd: float = abs(get_float_value(data, "notionalUsd"))
+        mark_price: float = get_float_value(data, "markPx")
+        if notional_usd and mark_price:
+            return -(notional_usd / mark_price)
+
+        # Last resort: convert the quote amount by entry price if possible.
+        avg_price: float = get_float_value(data, "avgPx")
+        if pos and avg_price:
+            self.gateway.write_log(f"Estimate margin short position volume with avgPx: {name}")
+            return -(abs(pos) / avg_price)
+
+        # If all conversion fields are missing, expose the raw short size.
+        self.gateway.write_log(f"Fallback to raw margin short position volume: {name}")
+        return -abs(pos)
 
     def on_send_order(self, packet: dict) -> None:
         """
