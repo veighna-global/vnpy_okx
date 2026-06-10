@@ -296,12 +296,9 @@ class OkxGateway(BaseGateway):
 
     def query_position(self) -> None:
         """
-        Query asset positions.
-
-        This method is not implemented because OKX provides position updates
-        through the websocket API.
+        Query asset positions via REST API.
         """
-        pass
+        self.rest_api.query_position()
 
     def query_history(self, req: HistoryRequest) -> list[BarData]:
         """
@@ -480,6 +477,73 @@ class OkxGateway(BaseGateway):
         )
         return order
 
+    def parse_position_item(self, d: dict) -> None:
+        """
+        Parse single OKX position record and push PositionData.
+        """
+        name: str = d["instId"]
+        inst_type: str = d.get("instType", "")
+        contract: ContractData | None = self.get_contract_by_name(name, inst_type)
+        if not contract:
+            self.write_log(f"Failed to parse position data, contract not found: {name}")
+            return
+
+        pos: float = float(d["pos"])
+        if inst_type == "MARGIN":
+            pos = self.parse_margin_position_volume(d)
+
+        position: PositionData = PositionData(
+            symbol=contract.symbol,
+            exchange=Exchange.GLOBAL,
+            direction=Direction.NET,
+            volume=pos,
+            price=get_float_value(d, "avgPx"),
+            pnl=get_float_value(d, "upl"),
+            gateway_name=self.gateway_name,
+        )
+        self.on_position(position)
+
+    def parse_margin_position_volume(self, data: dict) -> float:
+        """
+        Parse OKX margin position into base-currency net volume.
+        """
+        name: str = data["instId"]
+        base_ccy, quote_ccy = name.split("-")[:2]
+
+        pos: float = get_float_value(data, "pos")
+        pos_ccy: str = data.get("posCcy", "")
+
+        # Long margin positions are denominated in the base currency.
+        if pos_ccy == base_ccy:
+            return abs(pos)
+
+        # Unknown position currency: keep the exchange value unchanged.
+        if pos_ccy != quote_ccy:
+            return pos
+
+        # Short margin positions are denominated in the quote currency, so
+        # prefer the base-currency liability as the real position size.
+        liab: float = abs(get_float_value(data, "liab"))
+        liab_ccy: str = data.get("liabCcy", "")
+        if liab and liab_ccy == base_ccy:
+            return -liab
+
+        # Fall back to mark value conversion when liability is unavailable.
+        notional_usd: float = abs(get_float_value(data, "notionalUsd"))
+        mark_price: float = get_float_value(data, "markPx")
+        if notional_usd and mark_price:
+            return -(notional_usd / mark_price)
+
+        # Last resort: convert the quote amount by entry price if possible.
+        avg_price: float = get_float_value(data, "avgPx")
+        if pos and avg_price:
+            self.write_log(f"Estimate margin short position volume with avgPx: {name}")
+            return -(abs(pos) / avg_price)
+
+        # If all conversion fields are missing, expose the raw short size.
+        self.write_log(f"Fallback to raw margin short position volume: {name}")
+        return -abs(pos)
+
     def process_timer_event(self, event: Event) -> None:
         """
         Process timer events for sending heartbeat messages.
@@ -647,6 +711,19 @@ class RestApi(RestClient):
             callback=self.on_query_order,
         )
 
+    def query_position(self) -> None:
+        """
+        Query holding positions.
+        """
+        if not self.key:
+            return
+
+        self.add_request(
+            "GET",
+            "/api/v5/account/positions",
+            callback=self.on_query_position,
+        )
+
     def query_contract(self) -> None:
         """
         Query available contracts.
@@ -727,6 +804,20 @@ class RestApi(RestClient):
             self.gateway.on_order(order)
 
         self.gateway.write_log("Order data received")
+        self.query_position()
+
+    def on_query_position(self, packet: dict, request: Request) -> None:
+        """
+        Callback of position query.
+        """
+        if packet.get("code") != "0":
+            self.gateway.write_log(f"Query position failed: {packet.get('msg')}")
+            return
+
+        for d in packet.get("data", []):
+            self.gateway.parse_position_item(d)
+
+        self.gateway.write_log("Position data received")
 
     def on_query_contract(self, packet: dict, request: Request) -> None:
         """
@@ -1522,73 +1613,8 @@ class PrivateApi(WebsocketApi):
         Parameters:
             packet: Position update data from websocket
         """
-        data: list = packet["data"]
-        for d in data:
-            name: str = d["instId"]
-            inst_type: str = d.get("instType", "")
-            contract: ContractData | None = self.gateway.get_contract_by_name(name, inst_type)
-            if not contract:
-                self.gateway.write_log(f"Failed to parse position data, contract not found: {name}")
-                continue
-
-            pos: float = float(d["pos"])
-            price: float = get_float_value(d, "avgPx")
-            pnl: float = get_float_value(d, "upl")
-
-            if inst_type == "MARGIN":
-                pos = self.parse_margin_position_volume(d)
-
-            position: PositionData = PositionData(
-                symbol=contract.symbol,
-                exchange=Exchange.GLOBAL,
-                direction=Direction.NET,
-                volume=pos,
-                price=price,
-                pnl=pnl,
-                gateway_name=self.gateway_name,
-            )
-            self.gateway.on_position(position)
-
-    def parse_margin_position_volume(self, data: dict) -> float:
-        """
-        Parse OKX margin position into base-currency net volume.
-        """
-        name: str = data["instId"]
-        base_ccy, quote_ccy = name.split("-")[:2]
-
-        pos: float = get_float_value(data, "pos")
-        pos_ccy: str = data.get("posCcy", "")
-
-        # Long margin positions are denominated in the base currency.
-        if pos_ccy == base_ccy:
-            return abs(pos)
-
-        # Unknown position currency: keep the exchange value unchanged.
-        if pos_ccy != quote_ccy:
-            return pos
-
-        # Short margin positions are denominated in the quote currency, so
-        # prefer the base-currency liability as the real position size.
-        liab: float = abs(get_float_value(data, "liab"))
-        liab_ccy: str = data.get("liabCcy", "")
-        if liab and liab_ccy == base_ccy:
-            return -liab
-
-        # Fall back to mark value conversion when liability is unavailable.
-        notional_usd: float = abs(get_float_value(data, "notionalUsd"))
-        mark_price: float = get_float_value(data, "markPx")
-        if notional_usd and mark_price:
-            return -(notional_usd / mark_price)
-
-        # Last resort: convert the quote amount by entry price if possible.
-        avg_price: float = get_float_value(data, "avgPx")
-        if pos and avg_price:
-            self.gateway.write_log(f"Estimate margin short position volume with avgPx: {name}")
-            return -(abs(pos) / avg_price)
-
-        # If all conversion fields are missing, expose the raw short size.
-        self.gateway.write_log(f"Fallback to raw margin short position volume: {name}")
-        return -abs(pos)
+        for d in packet["data"]:
+            self.gateway.parse_position_item(d)
 
     def on_send_order(self, packet: dict) -> None:
         """
