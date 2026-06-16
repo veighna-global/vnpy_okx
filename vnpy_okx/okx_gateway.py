@@ -50,7 +50,7 @@ REAL_PRIVATE_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
 REAL_BUSINESS_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
 
 # Demo server hosts
-DEMO_REST_HOST: str = "https://www.okx.com"
+DEMO_REST_HOST: str = "https://openapi.okx.com"
 DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public"
 DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private"
 DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business"
@@ -431,7 +431,7 @@ class OkxGateway(BaseGateway):
             direction=DIRECTION_OKX2VT[data["side"]],
             offset=Offset.NONE,
             traded=float(data["accFillSz"]),
-            price=float(data["px"]),
+            price=get_float_value(data, "px"),
             volume=float(data["sz"]),
             datetime=parse_timestamp(data["cTime"]),
             status=STATUS_OKX2VT[data["state"]],
@@ -469,7 +469,7 @@ class OkxGateway(BaseGateway):
             direction=DIRECTION_OKX2VT[data["side"]],
             offset=Offset.NONE,
             traded=float(data["accFillSz"]),
-            price=float(data["px"]),
+            price=get_float_value(data, "px"),
             volume=float(data["sz"]),
             datetime=parse_timestamp(data["cTime"]),
             status=STATUS_OKX2VT[data["state"]],
@@ -1555,7 +1555,7 @@ class PrivateApi(WebsocketApi):
 
             # Check if order is filled - skip trade creation if no fill size
             if d["fillSz"] == "0":
-                return
+                continue
 
             # Process trade data for filled or partially filled orders
             # Round trade volume number to meet minimum volume precision
@@ -1572,7 +1572,7 @@ class PrivateApi(WebsocketApi):
                 tradeid=d["tradeId"],
                 direction=order.direction,
                 offset=order.offset,
-                price=float(d["fillPx"]),
+                price=get_float_value(d, "fillPx"),
                 volume=trade_volume,
                 datetime=parse_timestamp(d["uTime"]),
                 gateway_name=self.gateway_name,
