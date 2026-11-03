@@ -45,15 +45,15 @@ UTC_TZ: ZoneInfo = ZoneInfo("UTC")
 
 # Real server hosts
 REAL_REST_HOST: str = "https://www.okx.com"
-REAL_PUBLIC_HOST: str = "wss://ws.okx.com:8443/ws/v5/public"
-REAL_PRIVATE_HOST: str = "wss://ws.okx.com:8443/ws/v5/private"
-REAL_BUSINESS_HOST: str = "wss://ws.okx.com:8443/ws/v5/business"
+REAL_PUBLIC_HOST: str = "wss://ws.okx.com/ws/v5/public"
+REAL_PRIVATE_HOST: str = "wss://ws.okx.com/ws/v5/private"
+REAL_BUSINESS_HOST: str = "wss://ws.okx.com/ws/v5/business"
 
 # Demo server hosts
 DEMO_REST_HOST: str = "https://openapi.okx.com"
-DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com:8443/ws/v5/public"
-DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com:8443/ws/v5/private"
-DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com:8443/ws/v5/business"
+DEMO_PUBLIC_HOST: str = "wss://wspap.okx.com/ws/v5/public"
+DEMO_PRIVATE_HOST: str = "wss://wspap.okx.com/ws/v5/private"
+DEMO_BUSINESS_HOST: str = "wss://wspap.okx.com/ws/v5/business"
 
 # Order status map
 STATUS_OKX2VT: dict[str, Status] = {
